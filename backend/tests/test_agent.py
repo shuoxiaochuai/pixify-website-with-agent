@@ -17,8 +17,11 @@ PROMPT = {"prompt": "浅木色桌面上的白色马克杯", "ratio": "1:1", "cou
 class FakePlanner:
     def __init__(self, message: AIMessage) -> None:
         self._message = message
+        self.calls = 0
+        self.messages = None
 
     async def ainvoke(self, messages):
+        self.calls += 1
         self.messages = messages
         return self._message
 
@@ -120,6 +123,59 @@ def test_spoken_ignores_fallback_when_plan_exists():
     assert spoken(_FALLBACK_REPLY, [{"tool": "flip_layer"}, {"tool": "rotate_layer"}]).startswith(
         "将按以下步骤执行"
     )
+
+
+def test_spoken_never_shows_internal_names_but_keeps_the_explanation():
+    from app.agent.graph import spoken
+
+    plan = [{"tool": "smart_edit", "params": {"instruction": "把老马改成老徐"}}]
+    prose = 'smart_edit 指令为"把老马改成老徐"。'
+    assert "smart_edit" not in spoken(prose, plan)
+    assert "没太理解" in spoken(prose, [])
+    refusal = "选区不一定包含老鼠。replace_region 需要完整提示词。"
+    assert spoken(refusal, []) == "选区不一定包含老鼠。"
+
+
+def test_prose_call_is_rescued_only_when_unambiguous():
+    from app.agent.graph import _calls_from_prose
+
+    rescued = _calls_from_prose("smart_edit 指令为“把衣服改成红色，保持背景不变”。")
+    assert rescued == [
+        {"tool": "smart_edit", "params": {"instruction": "把衣服改成红色，保持背景不变"}}
+    ]
+    # 提到两个工具名是对整条计划的描述，不能硬塞成单步
+    assert _calls_from_prose("我先用 smart_edit 改人物，再用 flip_layer 翻转。") == []
+
+
+def test_text_call_parsing_only_accepts_literals():
+    from app.agent.graph import _calls_from_text
+
+    assert _calls_from_text('smart_edit(instruction="把衣服改成红色")') == [
+        {"tool": "smart_edit", "params": {"instruction": "把衣服改成红色"}}
+    ]
+    assert _calls_from_text("__import__('os').system('calc')") == []
+    assert _calls_from_text('smart_edit("位置参数")') == []
+
+
+async def test_single_action_goal_is_planned_once(signed_in: httpx.AsyncClient, fake_planner):
+    fake = fake_planner(tool_call("flip_layer", {"direction": "vertical"}))
+    session_id = (await open_session(signed_in))["id"]
+
+    turn = await send(signed_in, session_id, "垂直翻转画面")
+
+    assert fake.calls == 1
+    assert [step["tool"] for step in turn["steps"]] == ["flip_layer"]
+
+
+async def test_dropped_action_triggers_one_replan(signed_in: httpx.AsyncClient, fake_planner):
+    fake = fake_planner(tool_call("flip_layer", {"direction": "vertical"}))
+    session_id = (await open_session(signed_in))["id"]
+
+    turn = await send(signed_in, session_id, "垂直翻转画面，然后把背景改成夏天")
+
+    assert fake.calls == 2
+    assert "漏掉了后续动作" in fake.messages[-1].content
+    assert [step["tool"] for step in turn["steps"]] == ["flip_layer"]
 
 
 async def test_canvas_facts_are_given_to_the_planner(signed_in: httpx.AsyncClient, fake_planner):
@@ -402,9 +458,9 @@ async def test_cancel_drops_unstarted_steps(signed_in: httpx.AsyncClient, fake_p
 
 
 async def test_failed_step_can_be_retried(signed_in: httpx.AsyncClient, fake_planner):
-    fake_planner(tool_call("replace_region", {"prompt": "改成黑色", "layer_id": "不存在的层"}))
+    fake_planner(tool_call("adjust_image", {"layer_id": "不存在的层", "brightness": 0.3}))
     session_id = (await open_session(signed_in))["id"]
-    turn = await send(signed_in, session_id, "把不存在的层换成黑色")
+    turn = await send(signed_in, session_id, "把不存在的层调亮")
 
     await run_tool({}, uuid.UUID(turn["steps"][0]["run_id"]))
     failed = (await signed_in.get(f"/api/sessions/{session_id}/messages")).json()[-1]
@@ -415,3 +471,20 @@ async def test_failed_step_can_be_retried(signed_in: httpx.AsyncClient, fake_pla
     ).json()
     assert retried["status"] == "running"
     assert retried["steps"][0]["run_id"] != failed["steps"][0]["run_id"]
+
+
+async def test_made_up_layer_name_falls_back_to_the_only_image(
+    signed_in: httpx.AsyncClient, fake_planner
+):
+    """局部修改允许图层回退：模型编造图层名时改唯一图像层，而不是报错。"""
+    fake_planner(tool_call("replace_region", {"prompt": "改成黑色", "layer_id": "人物"}))
+    session = await open_session(signed_in)
+    turn = await send(signed_in, session["id"], "把人物换成黑色")
+
+    await run_tool({}, uuid.UUID(turn["steps"][0]["run_id"]))
+    finished = (await signed_in.get(f"/api/sessions/{session['id']}/messages")).json()[-1]
+    after = (await signed_in.get(f"/api/sessions/{session['id']}")).json()
+
+    assert finished["status"] == "succeeded"
+    before_layer = session["document"]["layers"][0]["asset_id"]
+    assert after["document"]["layers"][0]["asset_id"] != before_layer

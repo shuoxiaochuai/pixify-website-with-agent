@@ -1,7 +1,7 @@
 import ast
-
+import re
 from functools import lru_cache
-from typing import TypedDict, Literal
+from typing import Literal, TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
@@ -9,7 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agent.llm import planner
 from app.agent.plan import PlanError, validate
 from app.services import tools as tool_service
-from app.tools import UnknownTool, label_of
+from app.tools import SPECS, UnknownTool, label_of
 
 _SYSTEM = """你是电商图片修图助手，通过调用工具完成用户的修图请求。
 
@@ -42,8 +42,10 @@ _SYSTEM = """你是电商图片修图助手，通过调用工具完成用户的�
   不要裁切主体，也不要用 crop_canvas。
 - 对多张图做同一套去背景、换背景、调色、超分、扩图或改尺寸时用 batch_process。
   单张精修、营销图、局部编辑和拆层不要用它。
-- 调用工具时不要输出解释或工具名。只有指令与修图无关、或现有工具确实做不到时，
-  才用一句中文说明，不要提内部参数。
+- 只能通过 function call 表达要做什么。回复文字里禁止出现任何工具名或参数名，
+  禁止用「smart_edit 指令为…」这类句子描述你打算怎么调用。
+- 需要说话时只说一句给用户听的中文，不解释、不复述、不确认参数。
+  只有指令与修图无关、或现有工具确实做不到时，才用一句中文说明。
 
 当前画布：{context}"""
 
@@ -52,6 +54,25 @@ _REFUSAL_LIMIT = 60
 
 _CONNECTORS = ("再", "然后", "接着", "并把", "同时", "最后", "之后", "顺便")
 _MAX_PLAN_TRIES = 2
+
+# 散文式调用里最可能承载指令的参数名，用于兜底抢救
+_PROSE_PARAM = {
+    "smart_edit": "instruction",
+    "replace_region": "prompt",
+    "erase_region": "prompt",
+    "replace_background": "prompt",
+}
+# 元话语开头，剥掉后剩下的才是要执行的指令
+_META_HEAD = re.compile(r"^\s*(?:指令|参数|内容|要求|说明)\s*(?:为|是|如下)?\s*[:：]?\s*")
+# 整段被引号包住时只脱一层，内部引号原样保留
+_WRAPPED = (
+    ("\u300c", "\u300d"),
+    ("\u201c", "\u201d"),
+    ('"', '"'),
+    ("\u2018", "\u2019"),
+    ("'", "'"),
+)
+
 
 class AgentState(TypedDict):
     goal: str
@@ -113,6 +134,65 @@ def _calls_from_text(text: str) -> list[dict]:
 
     return calls
 
+
+def _narrated(text: str) -> bool:
+    """回复里出现内部工具名，说明模型在描述调用而不是发起调用。"""
+    return any(spec.name in text for spec in SPECS)
+
+
+# 按句切分，保留标点，便于只丢掉描述调用的那几句
+_SENTENCE = re.compile(r"(?<=[。！？])|[\r\n]+")
+
+
+def _plain(reply: str) -> str:
+    """只留第一句不提内部工具名的话。
+
+    模型拒绝时会顺带点名工具解释原因（「replace_region 需要完整提示词」），
+    那种句子不能给用户看，但前面的正常说明要保住，不能整段作废。
+    """
+    for sentence in _SENTENCE.split((reply or "").strip()):
+        sentence = sentence.strip()
+        if sentence and not _narrated(sentence):
+            return _one_sentence(sentence)
+    return ""
+
+
+def _mentioned_tools(text: str) -> list[str]:
+    """散文里提到了哪几个已注册工具名。"""
+    return [spec.name for spec in SPECS if spec.name in text]
+
+
+def _instruction_of(text: str, name: str) -> str:
+    """去掉工具名与「指令为」这类元话语开头，再脱掉最外层引号。"""
+    cleaned = text.replace(name, " ").strip()
+    cleaned = _META_HEAD.sub("", cleaned).strip()
+    cleaned = cleaned.strip("。.!！，,、 \t\r\n")
+    for left, right in _WRAPPED:
+        if len(cleaned) > 2 and cleaned.startswith(left) and cleaned.endswith(right):
+            cleaned = cleaned[len(left) : -len(right)].strip()
+            break
+    return cleaned
+
+
+def _calls_from_prose(text: str) -> list[dict]:
+    """兜底：模型只用散文描述了一次调用，把这句话还原成真正的参数。
+
+    提到多于一个工具名时不抢救，那是对整条计划的描述，硬塞成单步会做错事。
+    """
+    mentioned = _mentioned_tools(text)
+    if len(mentioned) != 1:
+        return []
+    name = mentioned[0]
+    field = _PROSE_PARAM.get(name)
+    # 代码形式归 _calls_from_text 管，这里只处理散文
+    if field is None or f"{name}(" in text:
+        return []
+    instruction = _instruction_of(text, name)
+    if len(instruction) < 2:
+        return []
+    return [{"tool": name, "params": {field: instruction}}]
+
+
 async def _plan(state: AgentState) -> AgentState:
     messages = [
         SystemMessage(_SYSTEM.format(context=state["context"])),
@@ -120,11 +200,12 @@ async def _plan(state: AgentState) -> AgentState:
     ]
     # temperature=0，重试必须换个输入，否则得到一模一样的单个调用
     if state["retries"]:
-        messages.append(AIMessage(state["reply"] or "（上一轮只给出了一个步骤）"))
+        # 只放占位，绝不把上一轮的散文回填，否则等于示范「用文字描述调用」这种格式
+        messages.append(AIMessage("（上一轮只给出了一个步骤）"))
         messages.append(
             HumanMessage(
                 "上一轮漏掉了后续动作。这句话包含多个动作，"
-                "请在同一次回复中输出全部工具调用，不要只给第一步。"
+                "请把全部动作一次性给出，不要只给第一步。"
             )
         )
 
@@ -141,11 +222,17 @@ async def _plan(state: AgentState) -> AgentState:
         for call in message.tool_calls
     ]
 
-    # 兜底：模型把工具调用写成了普通文本
+    # 兜底一：模型把工具调用写成了 tool(arg=...) 代码形式
     if not plan:
         plan = _calls_from_text(reply)
         if plan:
             # 不再把 smart_edit(...) 原始文本展示给用户
+            reply = ""
+
+    # 兜底二：模型只写了散文（提到工具名却没真调用）
+    if not plan:
+        plan = _calls_from_prose(reply)
+        if plan:
             reply = ""
 
     return {
@@ -155,7 +242,6 @@ async def _plan(state: AgentState) -> AgentState:
     }
 
 
-
 def _verify(state: AgentState) -> AgentState:
     """模型给出的计划一律经服务端校验，不可直接执行。"""
     try:
@@ -163,11 +249,16 @@ def _verify(state: AgentState) -> AgentState:
     except (UnknownTool, tool_service.InvalidParams, PlanError) as exc:
         return {"plan": [], "reply": f"这一步暂时执行不了：{exc}"}
 
+
 def _route(state: AgentState) -> Literal["plan", "__end__"]:
-    """只规划出 1 步、但原话明显是多步 → 回到 plan 重来一次。"""
-    under_covered = bool(state["plan"]) and len(state["plan"]) < 2
-    if under_covered and state["retries"] < _MAX_PLAN_TRIES:
-        return "plan"
+    """只规划出 1 步、但原话明显是多步 → 回到 plan 重来一次。
+
+    必须拿连接词做判据，否则每个单步请求都会白跑两遍模型。
+    """
+    multi = bool(state["plan"]) and len(state["plan"]) < 2
+    if multi and any(word in state["goal"] for word in _CONNECTORS):
+        if state["retries"] < _MAX_PLAN_TRIES:
+            return "plan"
     return END
 
 
@@ -193,15 +284,15 @@ async def run(goal: str, context: str) -> tuple[str, list[dict]]:
 
 def spoken(reply: str, plan: list[dict]) -> str:
     """有计划就按步骤说话；没计划才用兜底或截成一句拒绝。"""
-    text = (reply or "").strip()
+    text = _plain(reply)
     if plan:
+        labels = "、".join(label_of(step["tool"], step.get("params")) for step in plan)
         if text and text != _FALLBACK_REPLY:
             return text
-        labels = "、".join(label_of(step["tool"], step.get("params")) for step in plan)
         if len(plan) > 1:
             return f"将按以下步骤执行：{labels}。确认后开始。"
         return f"好，正在{labels}。"
-    return _one_sentence(text) if text else _FALLBACK_REPLY
+    return text or _FALLBACK_REPLY
 
 
 def _one_sentence(text: str) -> str:
