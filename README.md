@@ -213,19 +213,70 @@ uv run pytest
 
 测试通过 mock 隔离了大模型和第三方接口调用，不消耗 API 额度。
 
-### 6. 部署
+### 6. 部署（Docker）
 
-`Dockerfile` 提供了多阶段构建，前端编译后打进后端镜像同源托管。服务器上安全组放开 7302、7313 端口，然后：
+`Dockerfile` 提供了多阶段构建，前端编译后打进后端镜像同源托管。服务器上只需放开 **7302** 一个端口，然后：
 
 ```bash
 cp .env.example .env
-# 生产环境必改：JWT_SECRET（openssl rand -hex 32）、S3_PUBLIC_ENDPOINT=http://你的公网IP:7313
+# 生产环境必改：JWT_SECRET（openssl rand -hex 32）
+# S3_PUBLIC_ENDPOINT 保持为空：图片走 /api/assets/{id}/file 同源代理，不需要暴露 7313
 
 docker compose --profile deploy up -d --build
 docker compose --profile deploy exec app alembic upgrade head
 ```
 
 浏览器打开 `http://你的公网IP:7302`。
+
+> 不要把 7313（MinIO）开到公网：它的默认凭据很弱，暴露出去等于把整桶原图交给任何人拖取。
+
+### 7. 裸机部署（没有 docker daemon 的算力平台实例）
+
+这类实例里装不了 docker，进程管理改用 supervisor，相关脚本都在 `deploy/` 下：
+
+| 文件 | 在哪跑 | 作用 |
+| --- | --- | --- |
+| `deploy/bootstrap.sh` | 服务器上，root | 一条命令重建 `/etc/retouch/env`、`/etc/retouch/supervisord.conf`、`/usr/local/bin/retouch`、系统依赖、数据库集群与迁移 |
+| `deploy.ps1` | 本地 Windows | 打包校验 → 备份 → 解包 → `uv sync` → `alembic` → `.env` 合并 → `dist` 原子替换 → 全栈重启 |
+
+服务器侧：
+
+```bash
+bash deploy/bootstrap.sh --check     # 只读体检，报告缺什么，不改任何东西
+bash deploy/bootstrap.sh             # 全量重建/补齐，可反复执行
+bash deploy/bootstrap.sh --skip-sync --skip-migrate   # 换实例但数据盘完好时
+```
+
+`bootstrap.sh` 的端口与数据库凭据全部从 `.env` 解析，所以改 `.env` 后重跑一遍就能保持配置、supervisor 定义与实际监听端口三者一致。日常操作统一走 `retouch`：
+
+```bash
+retouch status / health / restart / check
+retouch logs worker        # 抠图、生成类任务在 worker 里跑，不在 app 日志里
+retouch-backup             # pg_dump + 配置 + 对象存储打包
+```
+
+本地侧（PowerShell）：
+
+```powershell
+# 先看要执行什么，不上传不连接
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1 -DryRun -Backend -Clean -Sync -Migrate
+# 真正推送：顺序很重要，代码在前，依赖与迁移在重启之前
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1 -Backend -Sync -Migrate
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1 -Frontend
+```
+
+四个坑：
+
+- **supervisord 是守护进程，SSH 断开不影响服务**；但算力平台一般没有 systemd，实例重启后要有人登录一次才会自动拉起，无人值守时补一次 `ssh -p <端口> root@<主机> "retouch up"`。
+- **改后端代码必须同时重启 `app` 和 `worker`**，两者共用同一套代码，只重启 app 会出现接口是新的、执行逻辑是旧的。`deploy.ps1` 末尾的 `retouch restart` 已经覆盖。
+- **`deploy.ps1` 里的字符串不要用中文**。Windows PowerShell 5.1 读无 BOM 文件时用系统 ANSI 码页（GBK），中文字节会把紧随其后的闭合引号当 GBK 尾字节吞掉，得到一堆假的 `&& 不是有效语句分隔符` 报错，且报错行号远离真正的元凶。改完跑这一句自检：
+
+  ```powershell
+  $e=$null; [Management.Automation.Language.Parser]::ParseFile("$PWD\deploy.ps1",[ref]$null,[ref]$e); $e
+  ```
+
+- 公网可达时 `/api/auth/register` 是完全开放的，任何人都能建号并消耗你的模型额度。演示前先注册好几个账号再把链接发出去。
+
 
 
 ## 加入项目学习

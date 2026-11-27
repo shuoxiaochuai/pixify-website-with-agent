@@ -1,0 +1,27 @@
+# 本仓库在 Windows 上开发、在 Linux 上运行，而 core.autocrlf=true 会把 checkout
+# 出来的文本变成 CRLF。以下三类文件带 CRLF 会直接坏掉，必须钉死为 LF：
+#   *.sh        bash 报 $'\r': command not found
+#   Dockerfile  RUN 的反斜杠续行被 \r 打断，镜像构建失败
+#   *.yml       compose 的健康检查命令会带上不可见字符
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+docker-compose.yml text eol=lf
+
+# PowerShell 脚本统一 CRLF。注意 git 与多数编辑器（包括本次的文件写入）保存时不会
+# 补 BOM，所以 deploy.ps1 的字符串必须保持纯 ASCII —— 中文交给 GBK 误读会吞掉闭合引号。
+*.ps1 text eol=crlf
+
+# 源码与文档统一按换行符做 diff，避免行尾差异污染变更记录
+*.py text
+*.ts text
+*.tsx text
+*.md text
+.env.example text
+
+# 二进制资源不做任何换行转换
+*.png binary
+*.jpg binary
+*.webp binary
+*.ico binary
+*.woff2 binary
