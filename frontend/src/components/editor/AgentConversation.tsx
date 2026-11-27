@@ -92,7 +92,8 @@ function TurnBlock({
             {reply}
           </p>
         ) : (
-          <p className="text-ink mr-6 text-xs leading-relaxed">{reply}</p>
+          // 混合轮是「文字答案 + 修图那段的说法」两段，按行分开渲染
+          <p className="text-ink mr-6 whitespace-pre-line text-xs leading-relaxed">{reply}</p>
         )
       ) : null}
 

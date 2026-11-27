@@ -13,7 +13,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agent.chat import answer
 from app.agent.llm import planner
 from app.agent.plan import PlanError, validate
-from app.agent.triage import CHAT, EDIT, classify
+from app.agent.triage import CHAT, EDIT, MIXED, classify, split
 from app.agent.words import plain, text_of
 from app.services import tools as tool_service
 from app.tools import SPECS, UnknownTool, label_of
@@ -53,13 +53,18 @@ _SYSTEM = """你是电商图片修图助手，通过调用工具完成用户的�
   单张精修、营销图、局部编辑和拆层不要用它。
 - 只能通过 function call 表达要做什么。回复文字里禁止出现任何工具名或参数名，
   禁止用「smart_edit 指令为…」这类句子描述你打算怎么调用。
-- 需要说话时只说一句给用户听的中文，不解释、不复述、不确认参数。
-  与修图无关的提问已经在上游分流到闲聊通道，送到你这里的都是修图请求；
+- 需要说话时只说一句给用户看的中文，不解释、不复述、不确认参数。
+  用户原话里与修图无关的提问已经在上游拆走，送到你这里的只剩修图动作；
+  不要因为觉得这句话还有别的意思就整体拒绝，只把你接到的修图动作做完。
   现有工具确实做不到时，用一句中文说明做不到，不要推荐别的软件，也不要扯开话题。
 
 当前画布：{context}"""
 
 _FALLBACK_REPLY = "没太理解这条指令，换个说法或说得更具体一些。"
+
+# 混合轮两段结果各自独立：一段挂了只报这一段，另一段照常给出并落库
+_CHAT_FAILED = "这个问题我暂时答不上来。"
+_EDIT_FAILED = "修图那部分这次没安排出来，请单独再说一次。"
 
 _CONNECTORS = ("再", "然后", "接着", "并把", "同时", "最后", "之后", "顺便")
 _MAX_PLAN_TRIES = 2
@@ -93,6 +98,7 @@ _STAGES = {
     "triage": "在看你这句话的意思",
     EDIT: "这是个修图需求，正在安排步骤",
     CHAT: "这句和修图无关，直接回答",
+    MIXED: "这句话里既有提问又有修图，分开处理",
     "replan": "这句话里有好几个动作，重新安排",
 }
 
@@ -106,6 +112,11 @@ class AgentState(TypedDict):
     context: GetContext
     emit: Emit
     kind: str
+    # 拆句后各通道的输入。单通道时其中一个就是整句原话，另一个为空
+    edit_goal: str
+    chat_goal: str
+    # 混合轮已答出来的文字，与修图那段的 reply 各存一份，互不覆盖
+    chat_reply: str
     plan: list[dict]
     reply: str
     retries: int
@@ -205,19 +216,34 @@ async def _triage(state: AgentState) -> AgentState:
     """先分通道：无关提问不进规划模型，也就不占工具上下文。"""
     emit = state["emit"]
     await emit({"type": "stage", "text": _STAGES["triage"]})
-    kind = await classify(state["goal"])
+
+    # 明显可拆才拆。拆不动就退回原来的单通道判定，行为与改动前一致
+    parts = await split(state["goal"], classify)
+    if parts is None:
+        kind = await classify(state["goal"])
+        edit_goal, chat_goal = (state["goal"], "") if kind == EDIT else ("", state["goal"])
+    else:
+        kind = MIXED
+        edit_goal, chat_goal = parts
+
     # 手动测试时靠这行确认走的是哪条通道
     logger.info("指令分流 kind=%s goal=%s", kind, state["goal"][:40])
     # 通道一确定就推出去，闲聊气泡能早点换成虚线灰底
     await emit({"type": "kind", "value": kind})
     await emit({"type": "stage", "text": _STAGES[kind]})
-    return {"kind": kind}
+    return {"kind": kind, "edit_goal": edit_goal, "chat_goal": chat_goal}
+
+
+def _edit_goal_of(state: AgentState) -> str:
+    """修图那一段的原话。没拆句时就是整句，拆过之后不能再拿整句去喂规划模型。"""
+    return state["edit_goal"] or state["goal"]
 
 
 async def _plan(state: AgentState) -> AgentState:
+    goal = _edit_goal_of(state)
     messages = [
         SystemMessage(_SYSTEM.format(context=await state["context"]())),
-        HumanMessage(state["goal"]),
+        HumanMessage(goal),
     ]
     # temperature=0，重试必须换个输入，否则得到一模一样的单个调用
     if state["retries"]:
@@ -236,15 +262,22 @@ async def _plan(state: AgentState) -> AgentState:
     if state["retries"]:
         await emit({"type": "stage", "text": _STAGES["replan"]})
 
-    async for chunk in planner().astream(messages):
-        message = message + chunk
-        # 工具名比参数先到，第几步做什么此刻就能报，不用等整条计划成形
-        for part in getattr(chunk, "tool_call_chunks", None) or []:
-            index = (part.get("index") or 0) + 1
-            name = part.get("name")
-            if name and index > announced:
-                announced = index
-                await emit({"type": "plan", "index": index, "label": label_of(name, None)})
+    try:
+        async for chunk in planner().astream(messages):
+            message = message + chunk
+            # 工具名比参数先到，第几步做什么此刻就能报，不用等整条计划成形
+            for part in getattr(chunk, "tool_call_chunks", None) or []:
+                index = (part.get("index") or 0) + 1
+                name = part.get("name")
+                if name and index > announced:
+                    announced = index
+                    await emit({"type": "plan", "index": index, "label": label_of(name, None)})
+    except Exception:
+        # 单通道保持原样往上抛，由服务层记成整轮失败；混合轮文字已经答出来了，只报这一段
+        if state["kind"] != MIXED:
+            raise
+        logger.warning("混合轮修图段规划失败 goal=%s", goal[:40], exc_info=True)
+        return {"plan": [], "reply": _EDIT_FAILED, "retries": state["retries"] + 1}
 
     reply = text_of(message)
 
@@ -280,10 +313,18 @@ async def _plan(state: AgentState) -> AgentState:
 async def _chat(state: AgentState) -> AgentState:
     """只出一句话，不产计划：这一轮没有步骤，也就没有确认、执行与编辑历史。"""
     body = ""
-    async for piece in answer(state["goal"]):
-        body += piece
-        await state["emit"]({"type": "token", "text": piece})
-    return {"kind": CHAT, "reply": body, "plan": []}
+    goal = state["chat_goal"] or state["goal"]
+    try:
+        async for piece in answer(goal):
+            body += piece
+            await state["emit"]({"type": "token", "text": piece})
+    except Exception:
+        # 同上：纯闲聊还是得让服务层拿到真实原因，只有混合轮能把失败锁在文字段这一段
+        if state["kind"] != MIXED:
+            raise
+        logger.warning("混合轮文字段回答失败 goal=%s", goal[:40], exc_info=True)
+        body = _CHAT_FAILED
+    return {"chat_reply": body}
 
 
 def _verify(state: AgentState) -> AgentState:
@@ -295,17 +336,24 @@ def _verify(state: AgentState) -> AgentState:
 
 
 def _channel(state: AgentState) -> Literal["plan", "chat"]:
-    """分流结果决定这一轮进规划节点还是闲聊节点。"""
-    return "chat" if state["kind"] == CHAT else "plan"
+    """修图轮进规划节点。无关提问与混合轮都先进闲聊节点：
+    混合轮的修图那段随后还要再接规划节点。"""
+    return "plan" if state["kind"] == EDIT else "chat"
+
+
+def _after_chat(state: AgentState) -> Literal["plan", "__end__"]:
+    """混合轮的段序固定：文字先答出来，再安排修图步骤。纯闲聊到这里就结束。"""
+    return "plan" if state["kind"] == MIXED else END
 
 
 def _route(state: AgentState) -> Literal["plan", "__end__"]:
-    """只规划出 1 步、但原话明显是多步 → 回到 plan 重来一次。
+    """只规划出 1 步、但修图那段明显是多步 → 回到 plan 重来一次。
 
     必须拿连接词做判据，否则每个单步请求都会白跑两遍模型。
+    判据也不能看整句，混合轮的文字段里全是「然后」「另外」这类词。
     """
     multi = bool(state["plan"]) and len(state["plan"]) < 2
-    if multi and any(word in state["goal"] for word in _CONNECTORS):
+    if multi and any(word in _edit_goal_of(state) for word in _CONNECTORS):
         if state["retries"] < _MAX_PLAN_TRIES:
             return "plan"
     return END
@@ -321,9 +369,9 @@ def _graph():
 
     builder.add_edge(START, "triage")
     builder.add_conditional_edges("triage", _channel, {"plan": "plan", "chat": "chat"})
+    builder.add_conditional_edges("chat", _after_chat, {"plan": "plan", END: END})
     builder.add_edge("plan", "verify")
     builder.add_conditional_edges("verify", _route, {"plan": "plan", END: END})
-    builder.add_edge("chat", END)
     return builder.compile()
 
 
@@ -337,6 +385,9 @@ async def run(
             "context": context,
             "emit": emit or _silent,
             "kind": EDIT,
+            "edit_goal": goal,
+            "chat_goal": "",
+            "chat_reply": "",
             "plan": [],
             "reply": "",
             "retries": 0,
@@ -344,8 +395,21 @@ async def run(
     )
     if state["kind"] == CHAT:
         # 闲聊的话术已经组织好了，不再走步骤标签兜底
-        return state["reply"], [], CHAT
+        return state["chat_reply"], [], CHAT
+    if state["kind"] == MIXED:
+        reply = merged(state["chat_reply"], spoken(state["reply"], state["plan"]))
+        return reply, state["plan"], MIXED
     return spoken(state["reply"], state["plan"]), state["plan"], EDIT
+
+
+def merged(chat: str, edit: str) -> str:
+    """混合轮把两段拼成一条答复：文字答案在前，修图那段的说法在后。
+
+    两段都是已经组织好的完整句子，所以直接换行拼接，不另加标点。
+    """
+    if chat and edit:
+        return f"{chat}\n{edit}"
+    return chat or edit
 
 
 def spoken(reply: str, plan: list[dict]) -> str:

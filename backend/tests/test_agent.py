@@ -361,6 +361,183 @@ async def test_triage_falls_back_to_edit_when_the_model_is_gone(monkeypatch):
     assert await triage.classify("今天天气怎么样") == EDIT
 
 
+async def test_split_refuses_multi_step_edits():
+    """两段都是修图就不拆：多步编排要留给规划模型一次输出，拆开反而把一步做成两轮。"""
+    judge = channel(EDIT)
+
+    assert await triage.split("主体改红色，背景改蓝色", judge) is None
+    assert await triage.split("垂直翻转画面", judge) is None
+
+
+async def test_split_refuses_a_question_that_is_not_really_a_question():
+    """后半句长得像修图就不拆，否则「保持背景不变」这种会被当成闲聊拖走。"""
+
+    async def judge(text: str) -> str:
+        return EDIT if "背景" in text else CHAT
+
+    assert await triage.split("把衣服改成红色，保持背景不变", judge) is None
+    # 拆不出两段就不该拆
+    assert await triage.split("你是谁", channel(CHAT)) is None
+
+
+async def test_split_keeps_the_original_order_of_the_pieces():
+    """同通道的片段拼回一句，且按原句先后，不重排。"""
+
+    async def judge(text: str) -> str:
+        return CHAT if "公式" in text else EDIT
+
+    edit_goal, chat_goal = await triage.split(
+        "画面旋转90度然后告诉我二次函数的公式，再把背景换成蓝色", judge
+    )
+
+    assert edit_goal == "画面旋转90度，再把背景换成蓝色"
+    assert chat_goal == "告诉我二次函数的公式"
+
+
+async def test_mixed_turn_answers_first_and_plans_the_edit_after(
+    signed_in: httpx.AsyncClient, fake_planner, monkeypatch
+):
+    """先改后问：文字答案要答出来，修图步骤也要照常安排，不能只旋转不回答。"""
+    fake = fake_planner(tool_call("rotate_layer", {"angle": 90}))
+
+    async def chatter(goal: str):
+        yield "二次函数一般写成 y=ax²+bx+c。"
+
+    async def route(text: str) -> str:
+        return CHAT if "公式" in text else EDIT
+
+    monkeypatch.setattr(graph, "classify", route)
+    monkeypatch.setattr(graph, "answer", chatter)
+    session_id = (await open_session(signed_in))["id"]
+
+    turn = await send(signed_in, session_id, "画面旋转90度然后告诉我二次函数的公式")
+
+    assert turn["kind"] == "mixed"
+    assert [step["tool"] for step in turn["steps"]] == ["rotate_layer"]
+    assert turn["reply"].startswith("二次函数一般写成 y=ax²+bx+c。")
+    assert "旋转" in turn["reply"]
+    assert turn["error"] is None
+    # 规划模型只拿到修图那半句，无关提问不会再被当成要执行的动作整体拒绝
+    assert fake.messages[1].content == "画面旋转90度"
+
+
+async def test_mixed_turn_does_not_refuse_a_question_put_first(
+    signed_in: httpx.AsyncClient, fake_planner, monkeypatch
+):
+    """先问后改：换个语序不能把「二次函数」当成修图请求回一句无法完成。"""
+    fake = fake_planner(tool_call("rotate_layer", {"angle": 90}))
+
+    async def chatter(goal: str):
+        yield "二次函数一般写成 y=ax²+bx+c。"
+
+    async def route(text: str) -> str:
+        return CHAT if "公式" in text else EDIT
+
+    monkeypatch.setattr(graph, "classify", route)
+    monkeypatch.setattr(graph, "answer", chatter)
+    session_id = (await open_session(signed_in))["id"]
+
+    turn = await send(signed_in, session_id, "告诉我二次函数的公式然后画面旋转90度")
+
+    assert turn["kind"] == "mixed"
+    assert [step["tool"] for step in turn["steps"]] == ["rotate_layer"]
+    assert "无法完成" not in turn["reply"]
+    assert fake.messages[1].content == "画面旋转90度"
+
+
+async def test_mixed_edit_part_still_asks_for_confirmation(
+    signed_in: httpx.AsyncClient, fake_planner, monkeypatch
+):
+    """混合轮里修图那段是多步时，依旧先列步骤等确认，文字答案不受影响。"""
+    fake_planner(
+        tool_calls(
+            ("rotate_layer", {"angle": 90}),
+            ("flip_layer", {"direction": "horizontal"}),
+        )
+    )
+
+    async def chatter(goal: str):
+        yield "牛顿第二定律是 F=ma。"
+
+    async def route(text: str) -> str:
+        return CHAT if "定律" in text else EDIT
+
+    monkeypatch.setattr(graph, "classify", route)
+    monkeypatch.setattr(graph, "answer", chatter)
+    session_id = (await open_session(signed_in))["id"]
+
+    turn = await send(signed_in, session_id, "旋转90度然后告诉我牛顿第二定律，再水平翻转")
+
+    assert turn["status"] == "queued"
+    assert [step["tool"] for step in turn["steps"]] == ["rotate_layer", "flip_layer"]
+    assert turn["reply"].startswith("牛顿第二定律是 F=ma。")
+    assert "确认后开始" in turn["reply"]
+
+
+class PlannerGone:
+    """规划模型下线时的样子：一进流就抛。"""
+
+    async def astream(self, messages):
+        raise RuntimeError("Model not exist")
+        yield AIMessageChunk(content="")
+
+
+async def test_mixed_turn_keeps_the_answer_when_the_edit_part_fails(
+    signed_in: httpx.AsyncClient, monkeypatch
+):
+    """两段结果独立：修图那段挂了只报这一段，已经答出来的文字照样落库展示。
+
+    这一轮不能记 error——前端一旦拿到 error 就把正文藏掉，用户会看不见答案。
+    """
+
+    async def chatter(goal: str):
+        yield "二次函数一般写成 y=ax²+bx+c。"
+
+    async def route(text: str) -> str:
+        return CHAT if "公式" in text else EDIT
+
+    monkeypatch.setattr(graph, "classify", route)
+    monkeypatch.setattr(graph, "answer", chatter)
+    monkeypatch.setattr(graph, "planner", lambda: PlannerGone())
+    session_id = (await open_session(signed_in))["id"]
+
+    turn = await send(signed_in, session_id, "画面旋转90度然后告诉我二次函数的公式")
+
+    assert turn["kind"] == "mixed"
+    assert turn["error"] is None
+    assert turn["steps"] == []
+    assert "二次函数一般写成 y=ax²+bx+c。" in turn["reply"]
+    assert "没安排出来" in turn["reply"]
+
+
+class ChatterGone:
+    """闲聊模型下线时的样子。"""
+
+    def astream(self, messages):
+        raise RuntimeError("Model not exist")
+
+
+async def test_mixed_turn_keeps_the_plan_when_the_answer_fails(
+    signed_in: httpx.AsyncClient, fake_planner, monkeypatch
+):
+    """反方向同样独立：文字段挂了不能把修图步骤一并拖掉。"""
+    fake_planner(tool_call("rotate_layer", {"angle": 90}))
+
+    async def route(text: str) -> str:
+        return CHAT if "公式" in text else EDIT
+
+    monkeypatch.setattr(graph, "classify", route)
+    monkeypatch.setattr(chat_mod, "chatter", lambda: ChatterGone())
+    session_id = (await open_session(signed_in))["id"]
+
+    turn = await send(signed_in, session_id, "画面旋转90度然后告诉我二次函数的公式")
+
+    assert turn["kind"] == "mixed"
+    assert turn["error"] is None
+    assert [step["tool"] for step in turn["steps"]] == ["rotate_layer"]
+    assert "答不上来" in turn["reply"]
+
+
 async def test_chat_turn_reports_the_real_reason_when_the_model_fails(
     signed_in: httpx.AsyncClient, monkeypatch
 ):

@@ -2,9 +2,12 @@
 
 判错一律偏向修图通道：那正是改动前的唯一行为，最多多说一句解释；
 反过来把修图判成闲聊会直接丢掉工具调用，代价大得多。
+
+一句话里既有提问又有修图动作时，`split` 负责把它们拆开，各走各的通道。
 """
 
 import logging
+import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -15,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 EDIT = "edit"
 CHAT = "chat"
+# 拆分后的第三条通道：修图段照常出计划，文字段照常回答，两段结果各自独立
+MIXED = "mixed"
 
 _SYSTEM = """用户在使用一个 AI 修图产品，界面上已经打开了一张图片。判断他这句话要不要动图片。
 
@@ -52,3 +57,65 @@ async def classify(goal: str) -> str:
         logger.warning("分流模型不可用，按修图通道处理 goal=%s", goal[:40], exc_info=True)
         return EDIT
     return CHAT if verdict.lower().startswith("chat") else EDIT
+
+
+# 只在两个动作之间起衔接作用的连接词。刻意不收「再」与「并且」，
+# 它们更多出现在一句修图操作内部（翻转再放大、缩小并且居中）。
+_SPLITTERS = ("然后", "接着", "并把", "同时", "顺便", "之后", "另外", "还有")
+_SPLIT = re.compile(
+    r"[。！？!?；;\n]+|，|,|" + "|".join(re.escape(word) for word in _SPLITTERS)
+)
+
+# 混合轮只认「明显是在提问」的那一段。没有这层判据，
+# 「把衣服改成红色，保持背景不变」这种后半句会被误判成闲聊，把修图操作拆掉。
+_ASKS = (
+    "告诉我", "是什么", "什么意思", "为什么", "怎么", "如何", "解释", "说说", "讲讲",
+    "是谁", "多少", "哪个", "哪些", "有没有", "能不能", "吗", "呢", "？", "?",
+)
+
+
+def pieces_of(goal: str) -> list[str]:
+    """按句末标点、逗号与连接词切句。切不出两段就说明这句话不该拆。"""
+    parts = _SPLIT.split((goal or "").strip())
+    return [piece for piece in (part.strip("，, 、") for part in parts) if len(piece) > 1]
+
+
+def looks_like_ask(text: str) -> bool:
+    return any(word in text for word in _ASKS)
+
+
+async def split(goal: str, judge=None) -> tuple[str, str] | None:
+    """句子明显可拆时返回（修图段，文字段），否则返回 None 走单通道。
+
+    判据同时成立才拆：拆得出多段、一段命中修图词、另一段确实像在问东西。
+    全是修图时绝不拆，多步编排要留给规划模型一次输出，拆开反而会把一步做成两步。
+
+    这三条都是字符串判据，花不到模型调用。前置它们是为了不让
+    「弄亮一点再锐化一下」这种纯修图句白烧几 token 逐段问分流模型。
+
+    judge 只用于测试注入，默认逐段走 `classify`，命中关键词的段落不会花模型调用。
+    """
+    judge = judge or classify
+    pieces = pieces_of(goal)
+    if len(pieces) < 2:
+        return None
+    if not any(looks_like_ask(piece) for piece in pieces):
+        return None
+    if not any(looks_like_edit(piece) for piece in pieces):
+        return None
+
+    kinds = [await judge(piece) for piece in pieces]
+    if EDIT not in kinds or CHAT not in kinds:
+        return None
+
+    asks = [piece for piece, kind in zip(pieces, kinds, strict=True) if kind == CHAT]
+    if not any(looks_like_ask(piece) for piece in asks):
+        return None
+
+    def joined(wanted: str) -> str:
+        """同通道的片段拼回一句：修图段仍由规划模型一次给出全部步骤。"""
+        return "，".join(
+            piece for piece, kind in zip(pieces, kinds, strict=True) if kind == wanted
+        )
+
+    return joined(EDIT), joined(CHAT)

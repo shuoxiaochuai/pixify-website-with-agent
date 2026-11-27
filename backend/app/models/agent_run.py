@@ -11,10 +11,15 @@ from app.models.tool_run import RunStatus
 
 
 class TurnKind(enum.StrEnum):
-    """一轮指令走的通道。chat 轮次没有计划与工具，只用于对话展示。"""
+    """一轮指令走的通道。chat 轮次没有计划与工具，只用于对话展示。
+
+    mixed 是同一轮里既有无关提问又有修图动作：两段各跑一遍，
+    答复拼在一起，步骤与编辑历史仍然只属于修图那一段。
+    """
 
     EDIT = "edit"
     CHAT = "chat"
+    MIXED = "mixed"
 
 
 class AgentRun(UUIDBase):

@@ -19,8 +19,9 @@ export type PlanStep = {
   status: StepStatus
 }
 
-// 一轮指令走的通道：edit 会产计划并动画布，chat 只出一句话
-export type TurnKind = 'edit' | 'chat'
+// 一轮指令走的通道：edit 会产计划并动画布，chat 只出一句话，
+// mixed 是同一句里既有提问又有修图动作——正文先答问题，步骤照旧属于修图
+export type TurnKind = 'edit' | 'chat' | 'mixed'
 
 export type Turn = {
   id: string

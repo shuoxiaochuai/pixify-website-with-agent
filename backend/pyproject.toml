@@ -17,6 +17,7 @@ dependencies = [
     "bcrypt",
     "pyjwt",
     "httpx",
+    "boto3-stubs~=1.43.80",
 ]
 
 [project.optional-dependencies]
