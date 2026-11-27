@@ -330,7 +330,7 @@ case "\${1:-status}" in
   status)  ctl status ;;
   logs)   tail -n 80 -f /var/log/retouch/\${2:-app}.log ;;
   check)  bash $REPO/deploy/bootstrap.sh --check ;;
-  health) curl -s http://127.0.0.1:${API_PORT}/api/health; echo ;;
+  health) curl -fsS -m 5 http://127.0.0.1:${API_PORT}/api/health && echo || echo HEALTH_FAILED: 应用没响应，看 /var/log/retouch/app.log ;;
   *) echo "用法: retouch up|infra|stop|restart|status|logs [app|worker|pg|redis|minio]|check|health" ;;
 esac
 EOF
@@ -404,10 +404,18 @@ if [[ $SKIP_MIGRATE -eq 0 ]]; then
 fi
 
 retouch restart
-sleep 8
+# 原来这里是固定 sleep 8 再打印一次 health，而 curl 的失败被 CLI 里的“; echo”掩盖，
+# 于是应用没起来时输出里只多一个空行，看着像成功。改为轮询并把失败说出口。
+log "等待应用就绪（最多 24 秒）"
+HEALTHY=0
+for _ in $(seq 1 12); do
+  if curl -fsS -m 3 "http://127.0.0.1:$API_PORT/api/health" >/dev/null 2>&1; then HEALTHY=1; break; fi
+  sleep 2
+done
 log "状态与健康检查"
 retouch status
 retouch health
+[[ $HEALTHY -eq 1 ]] || warn "应用在 24 秒内没有响应 /api/health —— 注意 supervisor 仍会显示 RUNNING（autorestart 一直在拉起），必须去 /var/log/retouch/app.log 找 Traceback"
 printf '  postgres 实际数据目录：%s\n' "$(ps -o args= -C postgres | head -1 | sed -n 's/.*-D \([^ ]*\).*/\1/p')"
 [[ -d "$REPO/frontend/dist" ]] || warn "没有 frontend/dist，首页会返回 {\"detail\":\"Not Found\"}，本地 build 后 scp 上来"
 [[ -d /root/.u2net ]] || warn "没有 /root/.u2net，MATTING_PROVIDER=auto 时首次抠图会卡在下载权重"

@@ -380,6 +380,31 @@ async def test_split_refuses_a_question_that_is_not_really_a_question():
     assert await triage.split("你是谁", channel(CHAT)) is None
 
 
+async def test_split_recognises_imperative_questions():
+    """「讲一下X」是祈使句式的提问：没问号也没「是谁」，但确实在要一个答案。
+
+    认不出它时整句会原样进规划模型，模型在「用散文回答」与「调用工具」之间摇摆，
+    同一种句式就会有时只答、有时只修。用户原话回归。
+    """
+
+    async def judge(text: str) -> str:
+        return EDIT if triage.looks_like_edit(text) else CHAT
+
+    edit_goal, chat_goal = await triage.split(
+        "讲一下热力学第一定律，然后把画面里的20岁年轻人换成女生", judge
+    )
+    assert chat_goal == "讲一下热力学第一定律"
+    assert edit_goal == "把画面里的20岁年轻人换成女生"
+
+    edit_goal, chat_goal = await triage.split("介绍一下牛顿，顺便把背景换成纯白", judge)
+    assert chat_goal == "介绍一下牛顿"
+    assert edit_goal == "把背景换成纯白"
+
+    # 新词表不能把纯修图句误拆：两段都被判成修图时依旧不拆
+    assert await triage.split("把衣服改成红色，保持背景不变", judge) is None
+    assert await triage.split("把介绍文字改成三行，然后调亮一点", judge) is None
+
+
 async def test_split_keeps_the_original_order_of_the_pieces():
     """同通道的片段拼回一句，且按原句先后，不重排。"""
 
@@ -443,6 +468,34 @@ async def test_mixed_turn_does_not_refuse_a_question_put_first(
     assert [step["tool"] for step in turn["steps"]] == ["rotate_layer"]
     assert "无法完成" not in turn["reply"]
     assert fake.messages[1].content == "画面旋转90度"
+
+
+async def test_mixed_turn_splits_an_imperative_question(
+    signed_in: httpx.AsyncClient, fake_planner, monkeypatch
+):
+    """用户原话回归：先「讲一下X」再修图，两段都要触发，不能只答或只修。"""
+    fake = fake_planner(tool_call("rotate_layer", {"angle": 90}))
+
+    async def chatter(goal: str):
+        yield "热力学第一定律是能量守恒定律在热现象中的体现。"
+
+    async def route(text: str) -> str:
+        return CHAT if "定律" in text else EDIT
+
+    monkeypatch.setattr(graph, "classify", route)
+    monkeypatch.setattr(graph, "answer", chatter)
+    session_id = (await open_session(signed_in))["id"]
+
+    turn = await send(
+        signed_in, session_id, "讲一下热力学第一定律，然后把画面里人物换成女生"
+    )
+
+    assert turn["kind"] == "mixed"
+    assert [step["tool"] for step in turn["steps"]] == ["rotate_layer"]
+    assert turn["reply"].startswith("热力学第一定律是能量守恒定律在热现象中的体现。")
+    assert "旋转" in turn["reply"]
+    # 规划模型只拿到修图那半句，提问不会进去干扰它
+    assert fake.messages[1].content == "把画面里人物换成女生"
 
 
 async def test_mixed_edit_part_still_asks_for_confirmation(

@@ -265,7 +265,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1 -Backend -Sync 
 powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1 -Frontend
 ```
 
-四个坑：
+五个坑：
 
 - **supervisord 是守护进程，SSH 断开不影响服务**；但算力平台一般没有 systemd，实例重启后要有人登录一次才会自动拉起，无人值守时补一次 `ssh -p <端口> root@<主机> "retouch up"`。
 - **改后端代码必须同时重启 `app` 和 `worker`**，两者共用同一套代码，只重启 app 会出现接口是新的、执行逻辑是旧的。`deploy.ps1` 末尾的 `retouch restart` 已经覆盖。
@@ -275,6 +275,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1 -Frontend
   $e=$null; [Management.Automation.Language.Parser]::ParseFile("$PWD\deploy.ps1",[ref]$null,[ref]$e); $e
   ```
 
+- **传给 `ssh` 的远端命令里不要用双引号**。PowerShell 把参数交给原生程序（`ssh.exe`、`bash.exe`）时走 MSVCRT 命令行解析，字符串里的 `"` 会被当成定界符吃掉，远端 bash 收到的是**没有引号**的命令。两个后果都真实发生过：`"$UVBIN" sync` 退化成执行 coreutils 的 `/bin/sync`（报 `sync: unrecognized option '--all-extras'`）；`[ -x "$UVBIN" ]` 变成 `[ -x $UVBIN ]`，而值为空时这个判断**为真**，整条兜底链被跳过。要引号就用单引号（在 PS 单引号串里写两个 `''` 代表一个），或者像 `deploy.ps1` 那样用 `${VAR:-/nonexistent}` 保证空值也占一个词。本地可复现：`& 'D:\Git\bin\bash.exe' -c 'find backend -name "*.py" -not -path "*/.venv/*"'` 会报 `paths must precede expression`。
 - 公网可达时 `/api/auth/register` 是完全开放的，任何人都能建号并消耗你的模型额度。演示前先注册好几个账号再把链接发出去。
 
 
