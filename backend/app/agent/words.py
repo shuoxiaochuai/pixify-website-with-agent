@@ -2,7 +2,7 @@
 
 import re
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.tools import SPECS
 
@@ -15,13 +15,32 @@ CHAT_LIMIT = 120
 _SENTENCE = re.compile(r"(?<=[。！？])|[\r\n]+")
 _TERMINATORS = "。！？…"
 
+# 整条回答与流式增量走同一套清洗规则
+Message = AIMessage | AIMessageChunk
 
-def text_of(message: AIMessage) -> str:
+
+def text_of(message: Message) -> str:
     if isinstance(message.content, str):
         return message.content.strip()
     return "".join(
         block.get("text", "") for block in message.content if isinstance(block, dict)
     ).strip()
+
+
+def delta_of(message: Message) -> str:
+    """取一段增量文本。不能复用 text_of，它会 strip 掉中英混排的词间空格。"""
+    if isinstance(message.content, str):
+        return message.content
+    return "".join(block.get("text", "") for block in message.content if isinstance(block, dict))
+
+
+def until_sentence(text: str) -> str:
+    """只保留到最后一个句号为止的部分，末尾那句还没说完的先按住。
+
+    流式输出靠它判断哪些字已经能安全给用户看：工具名过滤与长度限制都是整句算出来的。
+    """
+    index = max((text.rfind(sep) for sep in "。！？"), default=-1)
+    return text[: index + 1] if index >= 0 else ""
 
 
 def mentions_tool(text: str) -> bool:

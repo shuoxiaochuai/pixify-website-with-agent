@@ -1,14 +1,28 @@
 """画布测试辅助：下发工具、建选区、构造场景图、按 id 取图层。"""
 
+import asyncio
 import uuid
 from io import BytesIO
 
 import httpx
 from PIL import Image, ImageDraw
 
+from app.services import agent as agent_service
 from app.tasks.tools import run_tool
 
 _QUEUED = {"queued", "running"}
+
+
+async def drain() -> None:
+    """等后台规划任务全部跑完。
+
+    POST 现在只落一条进行中轮次就返回，断言答复与计划之前得先收口。
+    """
+    while agent_service.pending_tasks:
+        await asyncio.wait_for(
+            asyncio.gather(*list(agent_service.pending_tasks), return_exceptions=True),
+            timeout=20,
+        )
 
 
 async def invoke(

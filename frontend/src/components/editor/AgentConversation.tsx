@@ -5,7 +5,7 @@ import type { PlanStep, StepStatus, Turn } from '@/api/agent'
 import { isTerminal } from '@/api/runs'
 import Button from '@/components/ui/Button'
 import ProgressBar from '@/components/ui/ProgressBar'
-import { usePlanActions, useTurns } from '@/hooks/useAgent'
+import { usePlanActions, useTurnStream, useTurns, type TurnLive } from '@/hooks/useAgent'
 import { useRun } from '@/hooks/useRun'
 
 const STEP_LABEL: Record<StepStatus, string> = {
@@ -22,10 +22,18 @@ export default function AgentConversation({ sessionId }: { sessionId: string }) 
   const { data: turns = [], isPending } = useTurns(sessionId)
   const end = useRef<HTMLDivElement>(null)
   const latest = turns.at(-1)
+  // 后台跑完才落库，最新一轮既没答复也没计划的那几秒才值得看过程
+  const liveId =
+    latest && !isTerminal(latest.status) && !latest.reply && !latest.steps.length
+      ? latest.id
+      : null
+  const live = useTurnStream(liveId, sessionId)
+  // 阶段与正文是一条条长出来的，轮次状态却没变，光靠 turns.length 滚不动
+  const growth = liveId ? `${live.stages.length}.${live.steps.length}.${live.text.length}` : ''
 
   useEffect(() => {
     end.current?.scrollIntoView({ block: 'end' })
-  }, [turns.length, latest?.status])
+  }, [turns.length, latest?.status, growth])
 
   if (isPending) {
     return <p className="text-faint min-h-0 flex-1 px-4 py-4 text-xs">加载中…</p>
@@ -43,16 +51,30 @@ if (turns.length === 0) {
   return (
     <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3">
       {turns.map((turn) => (
-        <TurnBlock key={turn.id} turn={turn} sessionId={sessionId} />
+        <TurnBlock
+          key={turn.id}
+          turn={turn}
+          sessionId={sessionId}
+          live={turn.id === liveId ? live : null}
+        />
       ))}
       <div ref={end} />
     </div>
   )
 }
 
-function TurnBlock({ turn, sessionId }: { turn: Turn; sessionId: string }) {
-  // 闲聊轮没有步骤、没有确认，也不该长得像一次执行结果
-  const chatting = turn.kind === 'chat'
+function TurnBlock({
+  turn,
+  sessionId,
+  live,
+}: {
+  turn: Turn
+  sessionId: string
+  live: TurnLive | null
+}) {
+  // 闲聊轮没有步骤、没有确认，也不该长得像一次执行结果：分流一确定就换样式
+  const chatting = (live?.kind ?? turn.kind) === 'chat'
+  const reply = turn.reply || live?.text || ''
 
   return (
     <div className="space-y-2">
@@ -60,15 +82,19 @@ function TurnBlock({ turn, sessionId }: { turn: Turn; sessionId: string }) {
         {turn.goal}
       </p>
 
+      {live && <Thinking stages={live.stages} steps={live.steps} />}
+
       {turn.error ? (
         <p className="text-danger mr-6 text-xs leading-relaxed">{turn.error}</p>
-      ) : chatting ? (
-        <p className="border-line text-faint mr-6 rounded-[12px] border border-dashed px-3 py-2 text-xs leading-relaxed">
-          {turn.reply}
-        </p>
-      ) : (
-        <p className="text-ink mr-6 text-xs leading-relaxed">{turn.reply}</p>
-      )}
+      ) : reply ? (
+        chatting ? (
+          <p className="border-line text-faint mr-6 rounded-[12px] border border-dashed px-3 py-2 text-xs leading-relaxed">
+            {reply}
+          </p>
+        ) : (
+          <p className="text-ink mr-6 text-xs leading-relaxed">{reply}</p>
+        )
+      ) : null}
 
       {turn.steps.map((step, index) => (
         <StepCard key={step.id} index={index + 1} step={step} sessionId={sessionId} />
@@ -76,6 +102,42 @@ function TurnBlock({ turn, sessionId }: { turn: Turn; sessionId: string }) {
 
       {/* 没有步骤就没有可确认、可取消、可重试的东西：规划阶段就失败的那一轮只能看错误文字 */}
       {chatting || !turn.steps.length ? null : <PlanActions turn={turn} sessionId={sessionId} />}
+    </div>
+  )
+}
+
+/**
+ * 伪思考：只说已经确定会发生的事——在看意思、在安排第几步、这一步做什么。
+ *
+ * 模型的原文不外泄，也不开思考模式多花 token，步骤名是工具调用刚起头时就报出来的。
+ */
+function Thinking({ stages, steps }: { stages: string[]; steps: (string | undefined)[] }) {
+  const named = steps.filter((label): label is string => Boolean(label))
+  if (!stages.length && !named.length) return null
+
+  return (
+    <div className="border-line mr-6 space-y-1 rounded-[12px] border border-dashed px-3 py-2">
+      {stages.map((line, index) => (
+        <p
+          key={`${index}-${line}`}
+          className="text-faint flex items-center gap-1.5 text-[10px] leading-relaxed"
+        >
+          <span
+            className={`size-1 shrink-0 rounded-full ${
+              index === stages.length - 1 && !named.length ? 'bg-brand animate-pulse' : 'bg-line-strong'
+            }`}
+          />
+          {line}
+        </p>
+      ))}
+      {named.map((label, index) => (
+        <p
+          key={`${index}-${label}`}
+          className="animate-fade-in text-faint pl-4 text-[10px] leading-relaxed"
+        >
+          {index + 1}. {label}
+        </p>
+      ))}
     </div>
   )
 }

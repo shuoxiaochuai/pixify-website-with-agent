@@ -1,17 +1,24 @@
+import asyncio
+import json
 import uuid
 
 import httpx
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
+from app import events
 from app.agent import chat as chat_mod
 from app.agent import graph, triage
 from app.agent.llm import planner
 from app.agent.triage import CHAT, EDIT
+from app.agent.words import brief
 from app.config import get_settings
+from app.db import SessionFactory
+from app.models import EditSession
 from app.services import agent as agent_service
 from app.tasks.tools import run_tool
-from tests.canvas import apply, error_of, layers, scene, select, settle
+from app.tools import label_of
+from tests.canvas import apply, drain, error_of, layers, scene, select, settle
 from tests.test_sessions import open_session
 
 PROMPT = {"prompt": "浅木色桌面上的白色马克杯", "ratio": "1:1", "count": 2}
@@ -27,6 +34,25 @@ class FakePlanner:
         self.calls += 1
         self.messages = messages
         return self._message
+
+    async def astream(self, messages):
+        """真实模型是一段一段给的，测试桩也按这个形状产出。"""
+        self.calls += 1
+        self.messages = messages
+        for index, call in enumerate(self._message.tool_calls):
+            yield AIMessageChunk(
+                content="",
+                tool_call_chunks=[
+                    {
+                        "name": call["name"],
+                        "args": json.dumps(call["args"], ensure_ascii=False),
+                        "index": index,
+                        "id": call["id"],
+                    }
+                ],
+            )
+        if self._message.content:
+            yield AIMessageChunk(content=self._message.content)
 
 
 @pytest.fixture
@@ -75,9 +101,16 @@ async def signed_in(client: httpx.AsyncClient, credentials):
 
 
 async def send(client: httpx.AsyncClient, session_id: str, text: str) -> dict:
+    """发一条指令并等后台把这一轮跑完。
+
+    POST 现在只保证轮次已落库，答复与计划都在后台补，断言前必须先收口。
+    """
     response = await client.post(f"/api/sessions/{session_id}/messages", json={"text": text})
     assert response.status_code == 201, response.text
-    return response.json()
+    turn = response.json()
+    await drain()
+    stored = (await client.get(f"/api/sessions/{session_id}/messages")).json()
+    return next(item for item in stored if item["id"] == turn["id"])
 
 
 async def test_tool_call_is_planned_and_dispatched(signed_in: httpx.AsyncClient, fake_planner):
@@ -240,8 +273,8 @@ async def test_chat_channel_skips_the_canvas_and_the_planner(
         read += 1
         return "画幅 1×1"
 
-    async def chatter(goal: str) -> str:
-        return "写诗我不会，图片相关的需求直接说。"
+    async def chatter(goal: str):
+        yield "写诗我不会，图片相关的需求直接说。"
 
     fake = fake_planner(AIMessage(content="不该被调用"))
     monkeypatch.setattr(graph, "classify", channel(CHAT))
@@ -272,8 +305,8 @@ async def test_chat_turn_does_not_disturb_the_next_edit_turn(
     fake_planner(tool_call("flip_layer", {"direction": "vertical"}))
     session_id = (await open_session(signed_in))["id"]
 
-    async def chatter(goal: str) -> str:
-        return "在的。"
+    async def chatter(goal: str):
+        yield "在的。"
 
     async def route(goal: str) -> str:
         return CHAT if goal == "你是谁" else EDIT
@@ -347,6 +380,184 @@ async def test_chat_turn_reports_the_real_reason_when_the_model_fails(
     assert "闲聊模型" in turn["error"]
 
 
+async def test_turn_is_saved_before_the_model_answers(
+    signed_in: httpx.AsyncClient, fake_planner, monkeypatch
+):
+    """POST 不等模型：先落一条进行中轮次，答复与计划在后台补。"""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow(goal: str) -> str:
+        entered.set()
+        await release.wait()
+        return EDIT
+
+    fake = fake_planner(tool_call("flip_layer", {"direction": "vertical"}))
+    monkeypatch.setattr(graph, "classify", slow)
+    session_id = (await open_session(signed_in))["id"]
+
+    response = await signed_in.post(
+        f"/api/sessions/{session_id}/messages", json={"text": "垂直翻转画面"}
+    )
+    turn = response.json()
+
+    assert response.status_code == 201
+    assert (turn["status"], turn["reply"], turn["steps"]) == ("running", "", [])
+
+    # 后台确实已经卡在模型上：轮次已落库，规划模型一次都还没跑
+    await asyncio.wait_for(entered.wait(), 5)
+    assert fake.calls == 0
+    stored = (await signed_in.get(f"/api/sessions/{session_id}/messages")).json()
+    assert stored[-1]["status"] == "running"
+
+    release.set()
+    await drain()
+
+    stored = (await signed_in.get(f"/api/sessions/{session_id}/messages")).json()
+    assert stored[-1]["status"] == "succeeded"
+    assert [step["tool"] for step in stored[-1]["steps"]] == ["flip_layer"]
+
+
+def _chunk(name: str | None, args: str, index: int, call_id: str | None = None):
+    """一段工具调用增量。真实模型就是这样一段一段给的。"""
+    return AIMessageChunk(
+        content="",
+        tool_call_chunks=[{"name": name, "args": args, "index": index, "id": call_id}],
+    )
+
+
+class StreamPlanner:
+    def __init__(self, pieces: list[AIMessageChunk]) -> None:
+        self._pieces = pieces
+
+    async def astream(self, messages):
+        for piece in self._pieces:
+            yield piece
+
+
+async def test_steps_are_announced_while_the_model_is_still_talking(monkeypatch):
+    """步骤名在计划成形前就推出去，同时增量必须能拼回完整 tool_calls。"""
+    pieces = [
+        _chunk("flip_layer", '{"direction"', 0, "call_1"),
+        _chunk(None, ': "horizontal"}', 0),
+        _chunk("rotate_layer", '{"angle"', 1, "call_2"),
+        _chunk(None, ": 15}", 1),
+    ]
+    events: list[dict] = []
+
+    async def collect(event: dict) -> None:
+        events.append(event)
+
+    async def context() -> str:
+        return "画幅 1×1，修订号 1。\n图层：底图（id=base，图像 1×1，锁定）\n当前无选区。"
+
+    monkeypatch.setattr(graph, "classify", channel(EDIT))
+    monkeypatch.setattr(graph, "planner", lambda: StreamPlanner(pieces))
+
+    reply, steps, kind = await graph.run("水平翻转再转 15 度", context, collect)
+
+    assert kind == EDIT
+    assert [step["tool"] for step in steps] == ["flip_layer", "rotate_layer"]
+    # 校验过的参数会补齐字段默认值，这里只认模型给的那个角度
+    assert steps[1]["params"]["angle"] == 15
+    assert [event["index"] for event in events if event["type"] == "plan"] == [1, 2]
+    assert [event["label"] for event in events if event["type"] == "plan"] == [
+        label_of("flip_layer"),
+        label_of("rotate_layer"),
+    ]
+    assert [event["type"] for event in events] == ["stage", "kind", "stage", "plan", "plan"]
+    assert label_of("flip_layer") in reply
+
+
+class FakeChatter:
+    def __init__(self, pieces: list[str]) -> None:
+        self._pieces = pieces
+
+    async def astream(self, messages):
+        for piece in self._pieces:
+            yield AIMessageChunk(content=piece)
+
+
+async def test_chat_pieces_add_up_to_the_stored_reply(monkeypatch):
+    """逐句推出去的正文拼起来必须与落库那句完全一致，否则收尾会跳字。"""
+    pieces = ["666 加 87 等于 753", "。", "牛顿第一定律", "也叫惯性定律", "。"]
+    monkeypatch.setattr(chat_mod, "chatter", lambda: FakeChatter(pieces))
+
+    streamed = [piece async for piece in chat_mod.answer("计算 666+87")]
+
+    assert streamed == ["666 加 87 等于 753。", "牛顿第一定律也叫惯性定律。"]
+    assert "".join(streamed) == chat_mod.compose(brief("".join(pieces)))
+
+
+async def test_tool_names_never_reach_the_stream(monkeypatch):
+    """含工具名的句子整句按住，用户看到的与落库的都不许泄漏。"""
+    pieces = ["replace_region 需要完整提示词。", "这张图我改不了。"]
+    monkeypatch.setattr(chat_mod, "chatter", lambda: FakeChatter(pieces))
+
+    streamed = [piece async for piece in chat_mod.answer("把老鼠换成红色")]
+
+    assert "".join(streamed) == "这张图我改不了。"
+
+
+async def test_turn_events_are_private_to_the_owner(
+    client: httpx.AsyncClient, credentials, other_credentials, fake_planner
+):
+    """事件流只拿到 turn id，归属要顺着会话查，不能让别人偷看对话。"""
+    fake_planner(tool_call("flip_layer", {"direction": "vertical"}))
+    await client.post("/api/auth/register", json=credentials)
+    session_id = (await open_session(client))["id"]
+    turn = await send(client, session_id, "垂直翻转画面")
+    path = f"/events/turns/{turn['id']}"
+
+    await client.post("/api/auth/logout")
+    assert (await client.get(path)).status_code == 401
+
+    await client.post("/api/auth/register", json=other_credentials)
+    assert (await client.get(path)).status_code == 404
+
+
+async def test_turn_events_are_replayed_to_late_subscribers():
+    """晚一步订阅也要拿到全部过程：阶段话术往往在浏览器连上之前就推完了。"""
+    turn_id = uuid.uuid4()
+
+    await events.publish_turn(turn_id, {"type": "stage", "text": "在看你这句话的意思"})
+    await events.publish_turn(uuid.uuid4(), {"type": "token", "text": "别的轮次"})
+    await events.publish_turn(turn_id, {"type": "plan", "index": 1, "label": "换背景"})
+    await events.publish_turn(turn_id, {"type": "done", "status": "running"})
+
+    received: list[dict] = []
+    async with events.subscribe_turn(turn_id) as messages:
+        async for payload in messages:
+            # 空闲超时产出 None，事件流只拿它发心跳，不算内容
+            if payload is None:
+                continue
+            received.append(payload)
+            if payload["type"] == "done":
+                break
+
+    assert [item["type"] for item in received] == ["stage", "plan", "done"]
+
+
+async def test_turn_stream_returns_snapshot_for_finished_turn(
+    signed_in: httpx.AsyncClient, fake_planner
+):
+    """跑完的一轮再连事件流，给完终态快照就断，刷新页面不会停在「正在安排…」。"""
+    fake_planner(tool_call("flip_layer", {"direction": "vertical"}))
+    session_id = (await open_session(signed_in))["id"]
+    turn = await send(signed_in, session_id, "垂直翻转画面")
+
+    frames: list[dict] = []
+    async with signed_in.stream("GET", f"/events/turns/{turn['id']}") as stream:
+        assert stream.headers["content-type"].startswith("text/event-stream")
+        async for line in stream.aiter_lines():
+            if line.startswith("data: "):
+                frames.append(json.loads(line[6:]))
+
+    assert [frame["type"] for frame in frames] == ["snapshot"]
+    assert frames[0]["turn"]["id"] == turn["id"]
+    assert frames[0]["turn"]["status"] == "succeeded"
+
+
 async def test_unregistered_tool_is_refused(signed_in: httpx.AsyncClient, fake_planner):
     fake_planner(tool_call("teleport_subject", {}))
     session_id = (await open_session(signed_in))["id"]
@@ -395,6 +606,20 @@ async def test_conversation_is_returned_in_order(signed_in: httpx.AsyncClient, f
 
     turns = (await signed_in.get(f"/api/sessions/{session_id}/messages")).json()
     assert [turn["goal"] for turn in turns] == ["第一句", "第二句"]
+
+
+async def test_message_list_keeps_the_latest_turns(signed_in: httpx.AsyncClient, fake_planner):
+    """超过一页时留下的必须是最近的几轮，否则刚发的指令会从对话框里消失。"""
+    fake_planner(AIMessage(content="好的。"))
+    session_id = (await open_session(signed_in))["id"]
+    for goal in ("第一句", "第二句", "第三句"):
+        await send(signed_in, session_id, goal)
+
+    async with SessionFactory() as session:
+        record = await session.get(EditSession, uuid.UUID(session_id))
+        recent = await agent_service.turns_of(session, record, limit=2)
+
+    assert [turn.goal for turn in recent] == ["第二句", "第三句"]
 
 
 async def test_missing_api_key_fails_the_turn(signed_in: httpx.AsyncClient, monkeypatch):

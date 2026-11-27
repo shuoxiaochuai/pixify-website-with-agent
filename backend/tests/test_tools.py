@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage
 
 from app.agent import graph
 from app.tasks.tools import run_tool
-from tests.canvas import apply, error_of, invoke, layers, scene, select
+from tests.canvas import apply, drain, error_of, invoke, layers, scene, select
 from tests.test_agent import FakePlanner
 from tests.test_sessions import open_session, upload
 
@@ -189,6 +189,11 @@ async def test_agent_can_dispatch_a_canvas_tool(signed_in: httpx.AsyncClient, mo
     turn = (
         await signed_in.post(f"/api/sessions/{session_id}/messages", json={"text": "水平翻转"})
     ).json()
+    assert turn["status"] == "running"
+
+    # POST 只落一条进行中的轮次，计划与画布变更都是后台跑完才补上的
+    await drain()
+    turn = (await signed_in.get(f"/api/sessions/{session_id}/messages")).json()[-1]
     session = (await signed_in.get(f"/api/sessions/{session_id}")).json()
 
     assert turn["steps"][0]["tool"] == "flip_layer"

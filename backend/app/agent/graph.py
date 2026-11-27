@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from functools import lru_cache
 from typing import Literal, TypedDict
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from app.agent.chat import answer
@@ -85,10 +85,26 @@ _WRAPPED = (
 # 画布摘要要查库，闲聊通道用不上，所以传取数函数而不是现成的字符串
 GetContext = Callable[[], Awaitable[str]]
 
+# 对话事件逐条推给前端：阶段、通道、步骤名、正文增量
+Emit = Callable[[dict], Awaitable[None]]
+
+# 伪思考：只说已经确定会发生的事，不额外花模型 token
+_STAGES = {
+    "triage": "在看你这句话的意思",
+    EDIT: "这是个修图需求，正在安排步骤",
+    CHAT: "这句和修图无关，直接回答",
+    "replan": "这句话里有好几个动作，重新安排",
+}
+
+
+async def _silent(event: dict) -> None:
+    """不关心过程时的空回调。"""
+
 
 class AgentState(TypedDict):
     goal: str
     context: GetContext
+    emit: Emit
     kind: str
     plan: list[dict]
     reply: str
@@ -187,9 +203,14 @@ def _calls_from_prose(text: str) -> list[dict]:
 
 async def _triage(state: AgentState) -> AgentState:
     """先分通道：无关提问不进规划模型，也就不占工具上下文。"""
+    emit = state["emit"]
+    await emit({"type": "stage", "text": _STAGES["triage"]})
     kind = await classify(state["goal"])
     # 手动测试时靠这行确认走的是哪条通道
     logger.info("指令分流 kind=%s goal=%s", kind, state["goal"][:40])
+    # 通道一确定就推出去，闲聊气泡能早点换成虚线灰底
+    await emit({"type": "kind", "value": kind})
+    await emit({"type": "stage", "text": _STAGES[kind]})
     return {"kind": kind}
 
 
@@ -209,7 +230,21 @@ async def _plan(state: AgentState) -> AgentState:
             )
         )
 
-    message = await planner().ainvoke(messages)
+    message = AIMessageChunk(content="")
+    announced = 0
+    emit = state["emit"]
+    if state["retries"]:
+        await emit({"type": "stage", "text": _STAGES["replan"]})
+
+    async for chunk in planner().astream(messages):
+        message = message + chunk
+        # 工具名比参数先到，第几步做什么此刻就能报，不用等整条计划成形
+        for part in getattr(chunk, "tool_call_chunks", None) or []:
+            index = (part.get("index") or 0) + 1
+            name = part.get("name")
+            if name and index > announced:
+                announced = index
+                await emit({"type": "plan", "index": index, "label": label_of(name, None)})
 
     reply = text_of(message)
 
@@ -244,7 +279,11 @@ async def _plan(state: AgentState) -> AgentState:
 
 async def _chat(state: AgentState) -> AgentState:
     """只出一句话，不产计划：这一轮没有步骤，也就没有确认、执行与编辑历史。"""
-    return {"kind": CHAT, "reply": await answer(state["goal"]), "plan": []}
+    body = ""
+    async for piece in answer(state["goal"]):
+        body += piece
+        await state["emit"]({"type": "token", "text": piece})
+    return {"kind": CHAT, "reply": body, "plan": []}
 
 
 def _verify(state: AgentState) -> AgentState:
@@ -288,10 +327,20 @@ def _graph():
     return builder.compile()
 
 
-async def run(goal: str, context: GetContext) -> tuple[str, list[dict], str]:
-    """规划一轮指令，返回（答复，尚未下发的计划，走的通道）。"""
+async def run(
+    goal: str, context: GetContext, emit: Emit | None = None
+) -> tuple[str, list[dict], str]:
+    """规划一轮指令，返回（答复，尚未下发的计划，走的通道）。事件不接就不推。"""
     state = await _graph().ainvoke(
-        {"goal": goal, "context": context, "kind": EDIT, "plan": [], "reply": "", "retries": 0}
+        {
+            "goal": goal,
+            "context": context,
+            "emit": emit or _silent,
+            "kind": EDIT,
+            "plan": [],
+            "reply": "",
+            "retries": 0,
+        }
     )
     if state["kind"] == CHAT:
         # 闲聊的话术已经组织好了，不再走步骤标签兜底

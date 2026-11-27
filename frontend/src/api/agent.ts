@@ -35,6 +35,16 @@ export type Turn = {
   steps: PlanStep[]
 }
 
+// 一轮指令的过程事件。后台跑完才落库，这几秒的界面全靠它们撑着
+export type TurnEvent =
+  | { type: 'stage'; text: string }
+  | { type: 'kind'; value: TurnKind }
+  | { type: 'plan'; index: number; label: string }
+  | { type: 'token'; text: string }
+  | { type: 'done'; status: RunStatus; kind: TurnKind }
+  | { type: 'failed'; error?: string }
+  | { type: 'snapshot'; turn: Turn }
+
 export const agentApi = {
   turns: (sessionId: string) => api.get<Turn[]>(`/sessions/${sessionId}/messages`),
   send: (sessionId: string, text: string) =>
