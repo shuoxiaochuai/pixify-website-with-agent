@@ -4,15 +4,21 @@
 # 背景：
 #   1. /opt/boot.sh 每次容器启动都会用 ${SSH_PUB_KEY} 覆盖 /root/.ssh/authorized_keys，
 #      平台未配置该变量时会直接清空，导致免密登录失效。
-#   2. /opt/boot.sh 在 need_service=1 时执行 /opt/start.sh，但 start.sh 只起 code-server，
-#      没有 supervisord，重启后网关 502。
-#   3. /root/.bashrc 里的自启写在交互判断之后，非交互 ssh 执行不到。
+#   2. /opt/boot.sh 只在 need_service=1 时执行 /opt/start.sh；无卡模式下平台注入
+#      need_service=0，那段自启完全不执行，容器一重启网页就是 502 bad gateway。
+#   3. 唯一与 need_service 无关的启动钩子是 boot.sh 里的 `source /etc/profile`，
+#      所以自启必须挂到 /etc/profile.d（本脚本的 PROFILE 段）。
+#   4. supervisord 单独被杀时也要能在 20 秒内自愈，由常驻 watchdog 负责。
+#   5. /root/.bashrc 里的自启写在交互判断之后，非交互 ssh 执行不到。
 #
-# 用法：scp deploy/retouch-guard.sh deploy/install-autostart.sh root@host:/tmp/，
+# 用法：scp deploy/retouch-guard.sh deploy/retouch-watchdog.sh deploy/retouch-profile.sh \
+#             deploy/install-autostart.sh root@host:/tmp/，
 #       然后 bash /tmp/install-autostart.sh
 set -euo pipefail
 
 GUARD=/usr/local/bin/retouch-guard
+WATCHDOG=/usr/local/bin/retouch-watchdog
+PROFILE=/etc/profile.d/zz-retouch-autostart.sh
 STARTSH=/opt/start.sh
 BASHRC=/root/.bashrc
 SSHRC=/root/.ssh/rc
@@ -22,6 +28,16 @@ echo '--- 1. 安装 retouch-guard'
 install -m 755 /tmp/retouch-guard.sh "$GUARD"
 echo "supervisord: $(command -v supervisord || echo '未找到')"
 
+echo '--- 1b. 安装常驻 watchdog 与 /etc/profile.d 启动钩子（need_service=0 时唯一的自启路径）'
+install -d -m 755 /var/log/retouch
+install -m 755 /tmp/retouch-watchdog.sh "$WATCHDOG"
+install -m 644 /tmp/retouch-profile.sh "$PROFILE"
+if pgrep -f '/usr/local/bin/retouch-watchdog' >/dev/null 2>&1; then
+  echo 'watchdog 已在运行'
+else
+  setsid nohup "$WATCHDOG" >>/var/log/retouch/watchdog.log 2>&1 &
+  echo 'watchdog 已启动'
+fi
 echo '--- 2. 补回 SSH 公钥（boot.sh 启动时会清空 authorized_keys）'
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
