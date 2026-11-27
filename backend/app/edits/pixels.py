@@ -1,9 +1,25 @@
 import io
 import math
+from threading import Lock
 
 from PIL import Image, ImageChops, ImageEnhance, ImageFilter
 
 _CORNER_TOLERANCE = 28
+_lock = Lock()
+_matting = None
+
+
+def _matting_session():
+    """钉死 u2net：rembg 的默认模型随版本漂移（2.0.81 起 remove() 默认现场下载
+    1GB 的 bria-rmbg，服务器连不上 GitHub 会把任务拖到超时），而 u2net 只有
+    167MB，正是部署时预置在 /root/.u2net 的那份，且无商用授权限制。"""
+    global _matting
+    with _lock:
+        if _matting is None:
+            from rembg import new_session
+
+            _matting = new_session("u2net")
+        return _matting
 
 
 def remove_background(data: bytes) -> bytes:
@@ -18,7 +34,7 @@ def remove_background(data: bytes) -> bytes:
             if provider == "rembg":
                 raise
         else:
-            return bytes(remove(data))
+            return bytes(remove(data, session=_matting_session()))
     return _corner_matte(data)
 
 
