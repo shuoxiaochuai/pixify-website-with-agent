@@ -23,7 +23,7 @@ def upload_payload(data: bytes, name="a.png", content_type="image/png"):
     return {"file": (name, data, content_type)}
 
 
-async def test_upload_returns_metadata_and_signed_url(signed_in: httpx.AsyncClient):
+async def test_upload_returns_metadata_and_file_url(signed_in: httpx.AsyncClient):
     response = await signed_in.post("/api/assets", files=upload_payload(make_image((320, 200))))
 
     assert response.status_code == 201
@@ -31,7 +31,31 @@ async def test_upload_returns_metadata_and_signed_url(signed_in: httpx.AsyncClie
     assert (body["width"], body["height"]) == (320, 200)
     assert body["image_format"] == "PNG"
     assert body["kind"] == "original"
-    assert "X-Amz-Signature" in body["url"]
+    # 图片走同源路径，反代与隧道下都不必再暴露对象存储
+    assert body["url"] == f"/api/assets/{body['id']}/file"
+
+
+async def test_asset_file_returns_same_origin_binary(signed_in: httpx.AsyncClient):
+    """返回的 url 直接就能读到字节，Content-Type 与落库格式一致。"""
+    asset = (await signed_in.post("/api/assets", files=upload_payload(make_image()))).json()
+
+    response = await signed_in.get(asset["url"])
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert len(response.content) > 0
+
+
+async def test_asset_file_rejects_other_users_asset(
+    client: httpx.AsyncClient, credentials, other_credentials
+):
+    await client.post("/api/auth/register", json=credentials)
+    asset_id = (await client.post("/api/assets", files=upload_payload(make_image()))).json()["id"]
+
+    await client.post("/api/auth/logout")
+    await client.post("/api/auth/register", json=other_credentials)
+
+    assert (await client.get(f"/api/assets/{asset_id}/file")).status_code == 404
 
 
 async def test_upload_detects_alpha_channel(signed_in: httpx.AsyncClient):

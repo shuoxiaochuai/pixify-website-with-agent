@@ -3,7 +3,6 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from app import storage
 from app.models import Asset
 from app.models.asset import AssetKind, AssetSource
 
@@ -32,7 +31,7 @@ class AssetOut(BaseModel):
             size_bytes=asset.size_bytes,
             has_alpha=asset.has_alpha,
             created_at=asset.created_at,
-            url=storage.signed_url(asset.storage_key),
+            url=f"/api/assets/{asset.id}/file",
         )
 
 

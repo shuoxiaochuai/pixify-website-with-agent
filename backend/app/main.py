@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from app import storage
 from app.config import get_settings
@@ -41,4 +41,15 @@ app.include_router(events.router)
 
 # 生产环境下前端与 API 同源，静态产物由本服务托管；开发环境走 Vite dev proxy。
 if settings.frontend_dist.is_dir():
-    app.mount("/", StaticFiles(directory=settings.frontend_dist, html=True), name="frontend")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def frontend(full_path: str) -> FileResponse:
+        """SPA 托管：真实文件按原样给，其余路径一律回 index.html 交给前端路由。
+
+        这条路由注册在最后，/api 与 /events 已经在前面吃掉自己的路径，不会被抢。
+        """
+        root = settings.frontend_dist.resolve()
+        target = (root / full_path).resolve()
+        if full_path and target.is_relative_to(root) and target.is_file():
+            return FileResponse(target)
+        return FileResponse(root / "index.html")

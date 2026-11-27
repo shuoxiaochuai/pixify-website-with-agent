@@ -1,15 +1,16 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
 
+from app import storage
 from app.db import SessionDep
 from app.deps import CurrentUser
 from app.models.asset import AssetKind, AssetSource
 from app.schemas.asset import AssetOut, LibraryGroupOut
 from app.services import assets as asset_service
 from app.services.assets import ORPHAN_TITLE
-from app.services.images import MAX_FILE_BYTES, ImageRejected, probe
+from app.services.images import ALLOWED_FORMATS, MAX_FILE_BYTES, ImageRejected, probe
 
 router = APIRouter(prefix="/assets", tags=["assets"])
 
@@ -70,3 +71,19 @@ async def get_asset(asset_id: uuid.UUID, user: CurrentUser, session: SessionDep)
     if asset is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "素材不存在")
     return AssetOut.of(asset)
+
+
+@router.get("/{asset_id}/file")
+async def get_asset_file(asset_id: uuid.UUID, user: CurrentUser, session: SessionDep) -> Response:
+    """素材二进制。走同源路径而不是签名 URL，反向代理下不必再暴露对象存储。"""
+    asset = await asset_service.get_for_user(session, user.id, asset_id)
+    if asset is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "素材不存在")
+
+    data = await storage.get(asset.storage_key)
+    return Response(
+        content=data,
+        media_type=ALLOWED_FORMATS[asset.image_format],
+        # storage_key 里带资产 id，内容一变 id 就变，可以放心让浏览器长期缓存
+        headers={"Cache-Control": "public, max-age=86400, immutable"},
+    )
