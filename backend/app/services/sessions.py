@@ -294,6 +294,16 @@ async def rename(session: AsyncSession, record: EditSession, title: str) -> Edit
     return record
 
 
+async def remove(session: AsyncSession, record: EditSession) -> None:
+    """彻底删掉一条会话，不留恢复余地。
+
+    图片墙关联、对话轮次、编辑记录与工具任务都由数据库外键级联带走；
+    素材本身属于用户而不是会话，删会话不会把图从素材库里抹掉。
+    """
+    await session.delete(record)
+    await session.commit()
+
+
 async def switch_current(session: AsyncSession, record: EditSession, asset: Asset) -> EditSession:
     """切换画布当前图。修订号递增，使旧修订号上的选区与遮罩失效。"""
     document = await _last_document_for(session, record, asset.id)

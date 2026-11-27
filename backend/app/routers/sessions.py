@@ -109,6 +109,17 @@ async def patch_session(
     return await _detail(session, record)
 
 
+@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_session(
+    session_id: uuid.UUID, user: CurrentUser, session: SessionDep
+) -> None:
+    """删掉整条会话。轮次、编辑记录与工具任务跟着级联走，图片留在素材库。"""
+    record = await _load(session, user, session_id)
+    # 选区存在 Redis，不在数据库级联里，不留到一个新会话的同号修订上
+    await selections.clear(record.id)
+    await sessions.remove(session, record)
+
+
 async def _selection_out(session: AsyncSession, user: User, payload: dict) -> SelectionOut:
     mask = await _asset(session, user, uuid.UUID(payload["mask_asset_id"]))
     return SelectionOut(

@@ -65,6 +65,24 @@ export function usePatchSession(id: string) {
   })
 }
 
+/**
+ * 删掉整条会话。后端是硬删除，没有撤销入口，所以调用方要先拿到确认。
+ */
+export function useDeleteSession() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => sessionsApi.remove(id),
+    onSuccess: (_detail, id) => {
+      // ['session', id] 是前缀，详情、消息流、编辑记录的缓存一起清掉，
+      // 否则切回同一个地址会先闪出已经不存在的内容
+      queryClient.removeQueries({ queryKey: detailKey(id) })
+      void queryClient.invalidateQueries({ queryKey: LIST_KEY })
+      toast('对话已删除', 'ok')
+    },
+    onError: (error) => toast(errorMessage(error), 'danger'),
+  })
+}
+
 export function useExportPack(id: string) {
   return useMutation({
     mutationFn: (assetIds: string[]) => sessionsApi.export(id, assetIds),

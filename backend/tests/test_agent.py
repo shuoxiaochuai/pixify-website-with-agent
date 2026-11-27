@@ -14,7 +14,7 @@ from app.agent.triage import CHAT, EDIT
 from app.agent.words import brief
 from app.config import get_settings
 from app.db import SessionFactory
-from app.models import EditSession
+from app.models import AgentRun, EditSession
 from app.services import agent as agent_service
 from app.tasks.tools import run_tool
 from app.tools import label_of
@@ -499,6 +499,28 @@ async def test_tool_names_never_reach_the_stream(monkeypatch):
     assert "".join(streamed) == "这张图我改不了。"
 
 
+def test_latex_is_written_as_plain_math():
+    """界面不渲染 LaTeX，公式得换成能直接读的形式，带层级的分数也不能读错。"""
+    assert brief(r"质能方程 $E=mc^2$，其中 $m$ 是质量。") == "质能方程 E=mc²，其中 m 是质量。"
+    assert brief(r"由 $\frac{-b \pm \sqrt{b^2-4ac}}{2a}$ 可解。") == "由 (-b ± √(b²-4ac))/2a 可解。"
+    acid = r"水的 pH 约 $7$，氢氧化钠溶液 $pH \approx 14$。"
+    assert brief(acid) == "水的 pH 约 7，氢氧化钠溶液 pH ≈ 14。"
+    # 落单的一个 $ 是货币符号，不是公式开头，不能跟着被拆
+    assert brief("这件衣服价格 $100。") == "这件衣服价格 $100。"
+
+
+async def test_math_pieces_add_up_to_the_stored_reply(monkeypatch):
+    """公式是在流里改写的，拼起来必须与落库那句一致，不能收尾时整段重排。"""
+    pieces = [r"勾股定理 $a^2+b^2=", r"c^2$。", r"斜边 $c = ", r"\sqrt{a^2+b^2}", r"。"]
+    monkeypatch.setattr(chat_mod, "chatter", lambda: FakeChatter(pieces))
+
+    streamed = [piece async for piece in chat_mod.answer("勾股定理")]
+    text = "".join(streamed)
+
+    assert text == chat_mod.compose(brief("".join(pieces)))
+    assert text == "勾股定理 a²+b²=c²。斜边 c = √(a²+b²)。"
+
+
 async def test_turn_events_are_private_to_the_owner(
     client: httpx.AsyncClient, credentials, other_credentials, fake_planner
 ):
@@ -620,6 +642,20 @@ async def test_message_list_keeps_the_latest_turns(signed_in: httpx.AsyncClient,
         recent = await agent_service.turns_of(session, record, limit=2)
 
     assert [turn.goal for turn in recent] == ["第二句", "第三句"]
+
+
+async def test_deleting_the_session_drops_its_turns(
+    signed_in: httpx.AsyncClient, fake_planner
+):
+    """会话整条删掉，名下的轮次行也跟着级联，不给对话列表留孤儿。"""
+    fake_planner(tool_call("flip_layer", {"direction": "vertical"}))
+    session_id = (await open_session(signed_in))["id"]
+    turn = await send(signed_in, session_id, "垂直翻转画面")
+
+    assert (await signed_in.delete(f"/api/sessions/{session_id}")).status_code == 204
+
+    async with SessionFactory() as session:
+        assert await session.get(AgentRun, uuid.UUID(turn["id"])) is None
 
 
 async def test_missing_api_key_fails_the_turn(signed_in: httpx.AsyncClient, monkeypatch):
