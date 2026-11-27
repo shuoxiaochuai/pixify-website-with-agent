@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.db import SessionFactory
 from app.models import EditHistory, SessionAsset
 from app.services import selections
-from tests.canvas import invoke
+from tests.canvas import apply, invoke, scene
 from tests.test_assets import make_image, upload_payload
 
 
@@ -60,6 +60,55 @@ async def test_unadopted_candidates_stay_on_the_wall(signed_in: httpx.AsyncClien
     body = await open_session(signed_in, current_asset_id=current, asset_ids=[current, *others])
 
     assert [asset["id"] for asset in body["assets"]] == [current, *others]
+
+
+async def test_a_wall_entry_can_be_detached(signed_in: httpx.AsyncClient):
+    """摘掉一张只少一个墙上的引用：图本身还在素材库里，画布修订号也不动。"""
+    current = await upload(signed_in)
+    extra = await upload(signed_in, (500, 500))
+    body = await open_session(signed_in, current_asset_id=current, asset_ids=[current, extra])
+
+    response = await signed_in.delete(f"/api/sessions/{body['id']}/assets/{extra}")
+
+    assert response.status_code == 204
+    detail = (await signed_in.get(f"/api/sessions/{body['id']}")).json()
+    assert [asset["id"] for asset in detail["assets"]] == [current]
+    assert detail["revision"] == body["revision"]
+    assert (await signed_in.get(f"/api/assets/{extra}")).status_code == 200
+
+
+async def test_current_image_cannot_be_detached(signed_in: httpx.AsyncClient):
+    """画布上那张还挂在墙上，摘掉就没有切回它的入口，只能拒掉。"""
+    body = await open_session(signed_in)
+
+    response = await signed_in.delete(
+        f"/api/sessions/{body['id']}/assets/{body['current_asset_id']}"
+    )
+
+    assert response.status_code == 409
+    assert "画布" in response.json()["detail"]
+
+
+async def test_asset_used_by_a_layer_cannot_be_detached(signed_in: httpx.AsyncClient):
+    """拆层后主体那张只挂在图层上、并不是当前图，摘掉画布就凭空空出一层，同样要拒。"""
+    body = await open_session(signed_in, image=scene())
+    after = await apply(signed_in, body["id"], "split_layers")
+    subject = next(
+        layer["asset_id"] for layer in after["document"]["layers"] if layer["id"] == "subject"
+    )
+
+    response = await signed_in.delete(f"/api/sessions/{body['id']}/assets/{subject}")
+
+    assert subject != after["current_asset_id"]
+    assert response.status_code == 409
+
+
+async def test_detaching_an_unknown_asset_is_rejected(signed_in: httpx.AsyncClient):
+    body = await open_session(signed_in)
+
+    response = await signed_in.delete(f"/api/sessions/{body['id']}/assets/{uuid.uuid4()}")
+
+    assert response.status_code == 404
 
 
 async def test_switching_current_image_bumps_revision(signed_in: httpx.AsyncClient):

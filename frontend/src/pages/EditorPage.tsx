@@ -11,7 +11,12 @@ import ProgressBar from '@/components/ui/ProgressBar'
 import { buttonClass } from '@/components/ui/buttonStyles'
 import { useMountTransition } from '@/hooks/useMountTransition'
 import { useSelection } from '@/hooks/useSelection'
-import { usePatchSession, useSession, useSessionTools } from '@/hooks/useSessions'
+import {
+  useDetachWallAsset,
+  usePatchSession,
+  useSession,
+  useSessionTools,
+} from '@/hooks/useSessions'
 import { ZOOM_STEP, useCanvasView } from '@/stores/canvasView'
 import { useEditorUi } from '@/stores/editorUi'
 
@@ -39,6 +44,7 @@ export default function EditorPage() {
 function Workspace({ sessionId }: { sessionId: string }) {
   const { data: session, isError } = useSession(sessionId)
   const patch = usePatchSession(sessionId)
+  const detach = useDetachWallAsset(sessionId)
   const tools = useSessionTools(sessionId)
   const picking = useSelection(sessionId, session?.revision ?? 0)
 
@@ -60,6 +66,13 @@ function Workspace({ sessionId }: { sessionId: string }) {
     () => new Map((session?.assets ?? []).map((asset) => [asset.id, asset.url])),
     [session?.assets],
   )
+
+  // 画布上正用着的图：底图之外还可能是被图层引用的那几张，摘掉画布就凭空空一块
+  const usedIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const layer of session?.document.layers ?? []) if (layer.asset_id) ids.add(layer.asset_id)
+    return ids
+  }, [session?.document])
 
   useEffect(() => {
     if (!session) return
@@ -189,8 +202,10 @@ function Workspace({ sessionId }: { sessionId: string }) {
         <ImageWall
           assets={session.assets}
           currentId={session.current_asset_id}
-          disabled={patch.isPending || tools.busy}
+          usedIds={usedIds}
+          disabled={patch.isPending || tools.busy || detach.isPending}
           onPick={(current_asset_id) => patch.mutate({ current_asset_id })}
+          onDetach={(asset_id) => detach.mutate(asset_id)}
         />
       </div>
     </>

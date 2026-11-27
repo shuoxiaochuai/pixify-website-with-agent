@@ -29,7 +29,7 @@ from app.services import exports, selections, sessions, tools
 from app.services.agent import CannotCancel, CannotConfirm, CannotRetry, TurnNotFound
 from app.services.exports import UnknownExportAsset
 from app.services.selections import EmptySelection, StaleSelection
-from app.services.sessions import CannotRedo, CannotUndo, SessionNotFound
+from app.services.sessions import CannotDetach, CannotRedo, CannotUndo, SessionNotFound
 from app.services.tools import InvalidParams
 from app.tools import UnknownTool
 
@@ -118,6 +118,21 @@ async def delete_session(
     # 选区存在 Redis，不在数据库级联里，不留到一个新会话的同号修订上
     await selections.clear(record.id)
     await sessions.remove(session, record)
+
+
+@router.delete("/{session_id}/assets/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def detach_session_asset(
+    session_id: uuid.UUID, asset_id: uuid.UUID, user: CurrentUser, session: SessionDep
+) -> None:
+    """从图片墙摘掉这一张。素材本体留着，创作页还能再用它。"""
+    record = await _load(session, user, session_id)
+    asset = await _asset(session, user, asset_id)
+    try:
+        await sessions.detach_asset(session, record, asset)
+    except CannotDetach as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "这张还在画布上用着，先切走或撤掉那一步再删"
+        ) from exc
 
 
 async def _selection_out(session: AsyncSession, user: User, payload: dict) -> SelectionOut:

@@ -24,6 +24,10 @@ class CannotRedo(Exception):
     pass
 
 
+class CannotDetach(Exception):
+    pass
+
+
 def normalize_title(text: str | None) -> str:
     cleaned = " ".join((text or "").split())
     return cleaned[:TITLE_LIMIT] or DEFAULT_TITLE
@@ -301,6 +305,28 @@ async def remove(session: AsyncSession, record: EditSession) -> None:
     素材本身属于用户而不是会话，删会话不会把图从素材库里抹掉。
     """
     await session.delete(record)
+    await session.commit()
+
+
+async def detach_asset(session: AsyncSession, record: EditSession, asset: Asset) -> None:
+    """把一张图从会话图片墙摘掉，只动关联行。
+
+    素材本体与对象存储都不碰：编辑历史里还留着对它的引用，
+    真删了以后撤销到那一步就会指向一张不存在的图。
+
+    画布上正在用的那些一律拒掉。底图之外还可能是拆层、局部替换生成的图层，
+    摘掉这些等于让画布凭空空出一层。
+    """
+    document = LayerDocument.model_validate(record.document)
+    if asset.id == record.current_asset_id or any(
+        layer.asset_id == asset.id for layer in document.layers
+    ):
+        raise CannotDetach
+    await session.execute(
+        delete(SessionAsset).where(
+            SessionAsset.session_id == record.id, SessionAsset.asset_id == asset.id
+        )
+    )
     await session.commit()
 
 

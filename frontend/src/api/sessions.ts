@@ -133,6 +133,7 @@ export const sessionsApi = {
   patch: (id: string, input: SessionPatchInput) =>
     api.patch<SessionDetail>(`/sessions/${id}`, input),
   remove: (id: string) => api.delete<void>(`/sessions/${id}`),
+  detach: (id: string, assetId: string) => api.delete<void>(`/sessions/${id}/assets/${assetId}`),
   history: (id: string) => api.get<HistoryEntry[]>(`/sessions/${id}/history`),
   invoke: (id: string, tool: string, params: Record<string, unknown> = {}) =>
     api.post<ToolInvoke>(`/sessions/${id}/tools`, { tool, params }),

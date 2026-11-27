@@ -83,6 +83,23 @@ export function useDeleteSession() {
   })
 }
 
+/**
+ * 从图片墙摘掉一张。只删会话与图的关联行，素材本体还在素材库，
+ * 画布上正在用的那张会被后端拒掉（409），拒绝理由直接由 toast 播报。
+ */
+export function useDetachWallAsset(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (assetId: string) => sessionsApi.detach(id, assetId),
+    onSuccess: () => {
+      // 只重取详情：墙就存在 session.assets 里，不去打扰历史记录和消息流
+      void queryClient.invalidateQueries({ queryKey: detailKey(id), exact: true })
+      toast('已从图片墙移除', 'ok')
+    },
+    onError: (error) => toast(errorMessage(error), 'danger'),
+  })
+}
+
 export function useExportPack(id: string) {
   return useMutation({
     mutationFn: (assetIds: string[]) => sessionsApi.export(id, assetIds),
