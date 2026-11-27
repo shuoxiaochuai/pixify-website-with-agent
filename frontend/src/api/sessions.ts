@@ -82,6 +82,7 @@ export const ACTION_LABELS: Record<string, string> = {
   create_session: '新建会话',
   switch_current: '切换当前图',
   generate_image: '生成图片',
+  smart_edit: '智能修图',
   replace_background: '换背景',
   expand_canvas: '扩图',
   upscale_image: '超分',

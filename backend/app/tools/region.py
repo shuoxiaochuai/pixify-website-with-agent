@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.edits.mask import apply_masked
 from app.edits.split import EmptyCut, alpha_mask
-from app.layers import Layer, LayerDocument
+from app.layers import Layer, LayerDocument, LayerKind
 from app.models.asset import AssetKind
 from app.models.tool_run import ToolRun
 from app.providers import EditRequest, get_image_provider
@@ -28,11 +28,36 @@ class ReplaceRegionIn(LayerRef, MaskRef):
     prompt: str = Field(min_length=1, max_length=500)
 
 
-def _target(document: LayerDocument, layer_id: str | None, mask: bytes | None) -> Layer:
-    """点名了图层就改那一层；否则取选区下最上层，没选区就取最上层图像。"""
-    if not layer_id and mask is not None:
+def _target(
+    document: LayerDocument,
+    layer_id: str | None,
+    mask: bytes | None,
+) -> Layer:
+    """优先按选区定位；模型编造图层名时，单图场景安全退回唯一图像层。"""
+    if mask is not None:
+        if layer_id:
+            try:
+                return resolve_target(document, layer_id)
+            except ToolError:
+                pass
         return layer_under_mask(document, mask)
-    return resolve_target(document, layer_id)
+
+    if not layer_id:
+        return resolve_target(document, None)
+
+    try:
+        return resolve_target(document, layer_id)
+    except ToolError:
+        images = [
+            layer
+            for layer in document.layers
+            if layer.visible
+            and layer.kind is LayerKind.IMAGE
+            and layer.asset_id is not None
+        ]
+        if len(images) == 1:
+            return images[0]
+        raise
 
 
 def _region(source: bytes, mask: bytes | None, layer: Layer, canvas: tuple[int, int]) -> bytes:

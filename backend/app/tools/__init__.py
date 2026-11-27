@@ -19,9 +19,11 @@ from app.tools.layers import PROMOTE_OBJECT, SPLIT_LAYERS
 from app.tools.marketing import GENERATE_MARKETING, PREPARE_DELIVERY_SIZES
 from app.tools.region import ERASE_REGION, REPLACE_REGION
 from app.tools.retouch import ADJUST_IMAGE, REMOVE_BACKGROUND
+from app.tools.smart import SMART_EDIT
 
 SPECS: tuple[ToolSpec, ...] = (
     GENERATE_IMAGE,
+    SMART_EDIT,
     REPLACE_BACKGROUND,
     EXPAND_CANVAS,
     UPSCALE_IMAGE,
