@@ -67,10 +67,12 @@ if ($Backend) {
     Invoke-Remote ("cd " + $Remote + " && cp -a backend/app /tmp/app.bak-" + $stamp + " && " + $apply + " && find backend -name __pycache__ -type d -exec rm -rf {} + && echo CODE_UPDATED") ("extract failed, previous code is in /tmp/app.bak-" + $stamp)
 }
 
-# Source /etc/retouch/env explicitly: bash -lc would only find uv if ~/.profile happens to
-# chain into ~/.bashrc, and without UV_CACHE_DIR uv writes its cache to the small system
-# disk (/root/.cache/uv) which does not travel with the data disk.
-$syncCmd = 'set -a; . /etc/retouch/env; set +a; cd ' + $Remote + '/backend && "$UV" sync --all-extras'
+# Resolve uv at runtime with a fallback chain, and never let an empty variable land in
+# command position: /etc/retouch/env only carries UV= after bootstrap.sh generated it, so
+# '"$UV" sync' silently became coreutils "sync" and failed with a message pointing nowhere.
+# UV_CACHE_DIR still matters - without it uv caches to the small system disk, which does
+# not travel with the data disk.
+$syncCmd = 'set -a; [ -f /etc/retouch/env ] && . /etc/retouch/env; set +a; cd ' + $Remote + '/backend || exit 1; UVBIN="${UV:-}"; [ -x "$UVBIN" ] || UVBIN="$(command -v uv)"; [ -x "$UVBIN" ] || UVBIN="$HOME/.local/bin/uv"; [ -x "$UVBIN" ] || { echo "uv not found - run: bash deploy/bootstrap.sh"; exit 1; }; echo "uv = $UVBIN"; "$UVBIN" --version; "$UVBIN" sync --all-extras'
 if ($Sync) { Invoke-Remote $syncCmd "uv sync failed" }
 
 if ($Migrate) { Invoke-Remote ("cd " + $Remote + "/backend && .venv/bin/alembic heads && .venv/bin/alembic current && .venv/bin/alembic upgrade head && .venv/bin/alembic current") "migration failed" }
