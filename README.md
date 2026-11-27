@@ -265,6 +265,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1 -Backend -Sync 
 powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1 -Frontend
 ```
 
+`-Sync` 第一次装 torch 与 CUDA 轮子要拉约 6 GB：这一步用 `ssh -t` 给远端分配了终端，uv 会在原地刷新下载进度；即使没拿到 TTY，本地也会每 30 秒打印一次已耗时。停在同一个百分比上很久只是单个 wheel 太大，不是卡死。
+
 五个坑：
 
 - **supervisord 是守护进程，SSH 断开不影响服务**；但算力平台一般没有 systemd，实例重启后要有人登录一次才会自动拉起，无人值守时补一次 `ssh -p <端口> root@<主机> "retouch up"`。
