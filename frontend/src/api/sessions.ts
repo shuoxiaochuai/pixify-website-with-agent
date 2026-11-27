@@ -101,6 +101,7 @@ export const ACTION_LABELS: Record<string, string> = {
   move_layer: '移动',
   split_layers: '拆层',
   promote_object_to_layer: '提升为图层',
+  segment_lesion: '病灶分割',
   generate_marketing: '营销图',
   prepare_delivery_sizes: '投放尺寸',
 }

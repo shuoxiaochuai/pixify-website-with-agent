@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import type { Asset } from '@/api/assets'
 import { ACTION_LABELS, type Layer, type SessionDetail } from '@/api/sessions'
 import { BackgroundForm, ExpandForm, ReplaceForm } from '@/components/editor/GenerateEdits'
+import LesionPanel from '@/components/editor/LesionPanel'
 import Button from '@/components/ui/Button'
 import { useSessionHistory, type SessionTools } from '@/hooks/useSessions'
 import { formatBytes, formatDateTime } from '@/lib/format'
@@ -86,6 +87,15 @@ export default function LayerPanel({
               revision: session.revision,
               layer_id: selectedLayerId,
             })
+          }
+        />
+      )}
+      {panel === 'lesion' && (
+        <LesionPanel
+          disabled={tools.busy}
+          progress={tools.isRunning('segment_lesion') ? tools.pendingProgress : null}
+          onApply={({ types, threshold }) =>
+            tools.invoke('segment_lesion', { types, threshold, layer_id: selectedLayerId })
           }
         />
       )}

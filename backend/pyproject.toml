@@ -33,6 +33,11 @@ agent = [
     "langchain-core",
     "langchain-openai",
 ]
+lesion = [
+    # 病灶分割推理。只在 Linux 部署机安装：本地开发不需要 2GB+ 的 CUDA 版 torch。
+    # 无卡实例由 torch.cuda.is_available() 判定后直接提示算力不足，不影响启动。
+    "torch>=2.4; sys_platform == 'linux'",
+]
 
 [dependency-groups]
 dev = [
@@ -43,7 +48,8 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-exclude = ["migrations"]
+# caunet.py / layers.py 逐字取自训练仓库，state_dict 键名就是类属性名，不能按风格改
+exclude = ["migrations", "app/lesion/caunet.py", "app/lesion/layers.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

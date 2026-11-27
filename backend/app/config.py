@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     # auto：有 rapidocr 则识别文字层；none 跳过；测试强制 none
     ocr_provider: str = "auto"
 
+    # 病灶分割：四个 CAUNet 权重路径。任一留空视为未部署，前端会提示缺少权重
+    lesion_model_ex: str = ""
+    lesion_model_he: str = ""
+    lesion_model_ma: str = ""
+    lesion_model_se: str = ""
+    # auto：必须有可用 CUDA 才执行，无卡时直接提示算力不足；cpu 仅供本机调试
+    lesion_device: str = "auto"
+    # 概率阈值，越高越严格；官方可视化脚本用 0.8
+    lesion_threshold: float = 0.5
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"

@@ -16,6 +16,7 @@ const UNDOABLE = new Set([
   'adjust_image',
   'crop_canvas',
   'flip_layer',
+  'segment_lesion',
 ])
 
 export function toolLabel(tool: string | undefined) {

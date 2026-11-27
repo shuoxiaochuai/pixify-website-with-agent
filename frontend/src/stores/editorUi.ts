@@ -27,7 +27,7 @@ export type LayerPreview = {
   text?: string
 }
 
-export type Panel = 'layers' | 'adjust' | 'background' | 'expand' | 'replace' | null
+export type Panel = 'layers' | 'adjust' | 'background' | 'expand' | 'replace' | 'lesion' | null
 
 type EditorUi = {
   selectedLayerId: string | null

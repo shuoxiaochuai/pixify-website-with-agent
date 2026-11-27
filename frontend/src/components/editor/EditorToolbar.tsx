@@ -231,6 +231,14 @@ export default function EditorToolbar({
             </Button>
             <Button
               disabled={tools.busy}
+              active={ui.panel === 'lesion'}
+              title="眼底病灶分割，生成半透明标注图层"
+              onClick={() => ui.setPanel(ui.panel === 'lesion' ? null : 'lesion')}
+            >
+              病灶
+            </Button>
+            <Button
+              disabled={tools.busy}
               title="点选物体建立选区"
               onClick={() => ui.setSelectMode('point')}
             >
