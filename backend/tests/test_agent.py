@@ -4,9 +4,12 @@ import httpx
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.agent import graph
+from app.agent import chat as chat_mod
+from app.agent import graph, triage
 from app.agent.llm import planner
+from app.agent.triage import CHAT, EDIT
 from app.config import get_settings
+from app.services import agent as agent_service
 from app.tasks.tools import run_tool
 from tests.canvas import apply, error_of, layers, scene, select, settle
 from tests.test_sessions import open_session
@@ -34,6 +37,21 @@ def fake_planner(monkeypatch):
         return fake
 
     return install
+
+
+def channel(value: str):
+    """把分流固定成某个通道。triage 节点会 await 它，所以必须是异步函数。"""
+
+    async def classify(goal: str) -> str:
+        return value
+
+    return classify
+
+
+@pytest.fixture(autouse=True)
+def edit_channel(monkeypatch):
+    """分流默认走修图通道，不让测试花真实模型调用。闲聊通道由需要它的用例自己改。"""
+    monkeypatch.setattr(graph, "classify", channel(EDIT))
 
 
 def tool_call(name: str, args: dict) -> AIMessage:
@@ -89,11 +107,13 @@ async def test_marketing_tool_is_planned_and_dispatched(signed_in: httpx.AsyncCl
 
 
 async def test_plain_answer_dispatches_nothing(signed_in: httpx.AsyncClient, fake_planner):
+    """修图通道里模型只回一句话、没给工具调用：本轮不得产生任何步骤。"""
     fake_planner(AIMessage(content="现有工具做不到这个。"))
     session_id = (await open_session(signed_in))["id"]
 
-    turn = await send(signed_in, session_id, "帮我写一首诗")
+    turn = await send(signed_in, session_id, "把这匹马改成会飞的")
 
+    assert turn["kind"] == "edit"
     assert turn["steps"] == []
     assert turn["reply"] == "现有工具做不到这个。"
 
@@ -188,6 +208,7 @@ async def test_canvas_facts_are_given_to_the_planner(signed_in: httpx.AsyncClien
     assert "画幅 320×240" in system
     assert "修订号 1" in system
     assert "底图" in system
+    assert "id=base" in system
     assert "当前无选区" in system
 
 
@@ -206,6 +227,124 @@ async def test_existing_selection_is_given_to_the_planner(
 
     assert "已有选区" in fake.messages[0].content
     assert [step["tool"] for step in turn["steps"]] == ["replace_region"]
+
+
+async def test_chat_channel_skips_the_canvas_and_the_planner(
+    signed_in: httpx.AsyncClient, fake_planner, monkeypatch
+):
+    """闲聊通道：不读画布、不进规划模型、不出步骤，也不写编辑历史。"""
+    read = 0
+
+    async def spy(session, record):
+        nonlocal read
+        read += 1
+        return "画幅 1×1"
+
+    async def chatter(goal: str) -> str:
+        return "写诗我不会，图片相关的需求直接说。"
+
+    fake = fake_planner(AIMessage(content="不该被调用"))
+    monkeypatch.setattr(graph, "classify", channel(CHAT))
+    monkeypatch.setattr(graph, "answer", chatter)
+    monkeypatch.setattr(agent_service, "describe", spy)
+
+    session = await open_session(signed_in)
+    turn = await send(signed_in, session["id"], "帮我写一首诗")
+
+    assert turn["kind"] == "chat"
+    assert turn["status"] == "succeeded"
+    assert turn["steps"] == []
+    assert turn["reply"] == "写诗我不会，图片相关的需求直接说。"
+    assert (fake.calls, read) == (0, 0)
+
+    stored = (await signed_in.get(f"/api/sessions/{session['id']}/messages")).json()
+    assert [item["kind"] for item in stored] == ["chat"]
+    detail = (await signed_in.get(f"/api/sessions/{session['id']}")).json()
+    assert detail["revision"] == session["revision"]
+    history = (await signed_in.get(f"/api/sessions/{session['id']}/history")).json()
+    assert [entry["action"] for entry in history] == ["create_session"]
+
+
+async def test_chat_turn_does_not_disturb_the_next_edit_turn(
+    signed_in: httpx.AsyncClient, fake_planner, monkeypatch
+):
+    """两条通道交替：“你是谁”只说一句，下一句修图照常执行。"""
+    fake_planner(tool_call("flip_layer", {"direction": "vertical"}))
+    session_id = (await open_session(signed_in))["id"]
+
+    async def chatter(goal: str) -> str:
+        return "在的。"
+
+    async def route(goal: str) -> str:
+        return CHAT if goal == "你是谁" else EDIT
+
+    monkeypatch.setattr(graph, "classify", route)
+    monkeypatch.setattr(graph, "answer", chatter)
+
+    chat = await send(signed_in, session_id, "你是谁")
+    edited = await send(signed_in, session_id, "垂直翻转画面")
+
+    assert (chat["kind"], chat["steps"]) == ("chat", [])
+    assert edited["kind"] == "edit"
+    assert [step["tool"] for step in edited["steps"]] == ["flip_layer"]
+    assert edited["status"] == "succeeded"
+
+    turns = (await signed_in.get(f"/api/sessions/{session_id}/messages")).json()
+    assert [turn["kind"] for turn in turns] == ["chat", "edit"]
+
+
+class FakeTriage:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def ainvoke(self, messages):
+        self.calls += 1
+        return AIMessage(content="chat")
+
+
+async def test_triage_spends_no_model_call_on_obvious_edits(monkeypatch):
+    """命中关键词就直接判定为修图，模棱两可才问分流模型。"""
+    fake = FakeTriage()
+    monkeypatch.setattr(triage, "triager", lambda: fake)
+
+    assert await triage.classify("把背景换成白色") == EDIT
+    assert fake.calls == 0
+
+    assert await triage.classify("你是谁") == CHAT
+    assert fake.calls == 1
+
+
+class TriageGone:
+    """分流模型下线时的样子：一调就抛。"""
+
+    async def ainvoke(self, messages):
+        raise RuntimeError("Model not exist")
+
+
+async def test_triage_falls_back_to_edit_when_the_model_is_gone(monkeypatch):
+    """分流模型不可用不能拖垮整轮指令：退回修图通道，那才是改动前的唯一行为。"""
+    monkeypatch.setattr(triage, "triager", lambda: TriageGone())
+
+    assert await triage.classify("今天天气怎么样") == EDIT
+
+
+async def test_chat_turn_reports_the_real_reason_when_the_model_fails(
+    signed_in: httpx.AsyncClient, monkeypatch
+):
+    """闲聊模型挂了得说出是模型不可用，不能只丢一句「规划失败，请重试」。"""
+
+    def no_chatter():
+        raise RuntimeError("Model not exist")
+
+    monkeypatch.setattr(graph, "classify", channel(CHAT))
+    monkeypatch.setattr(chat_mod, "chatter", no_chatter)
+    session_id = (await open_session(signed_in))["id"]
+
+    turn = await send(signed_in, session_id, "计算 666+87")
+
+    assert turn["status"] == "failed"
+    assert turn["steps"] == []
+    assert "闲聊模型" in turn["error"]
 
 
 async def test_unregistered_tool_is_refused(signed_in: httpx.AsyncClient, fake_planner):

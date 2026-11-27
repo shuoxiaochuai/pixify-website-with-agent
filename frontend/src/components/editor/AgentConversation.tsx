@@ -31,10 +31,11 @@ export default function AgentConversation({ sessionId }: { sessionId: string }) 
     return <p className="text-faint min-h-0 flex-1 px-4 py-4 text-xs">加载中…</p>
   }
 
-  if (turns.length === 0) {
+if (turns.length === 0) {
     return (
       <p className="text-faint min-h-0 flex-1 px-4 py-4 text-xs leading-relaxed">
         用一句话说明要怎么改，例如「水平翻转」或「去背景再调亮一点」。多步计划会先列出再执行。
+        顺带问点别的也行，我只简短答两句。
       </p>
     )
   }
@@ -50,6 +51,9 @@ export default function AgentConversation({ sessionId }: { sessionId: string }) 
 }
 
 function TurnBlock({ turn, sessionId }: { turn: Turn; sessionId: string }) {
+  // 闲聊轮没有步骤、没有确认，也不该长得像一次执行结果
+  const chatting = turn.kind === 'chat'
+
   return (
     <div className="space-y-2">
       <p className="bg-brand-soft text-brand-strong ml-6 rounded-[12px] px-3 py-2 text-xs leading-relaxed">
@@ -58,6 +62,10 @@ function TurnBlock({ turn, sessionId }: { turn: Turn; sessionId: string }) {
 
       {turn.error ? (
         <p className="text-danger mr-6 text-xs leading-relaxed">{turn.error}</p>
+      ) : chatting ? (
+        <p className="border-line text-faint mr-6 rounded-[12px] border border-dashed px-3 py-2 text-xs leading-relaxed">
+          {turn.reply}
+        </p>
       ) : (
         <p className="text-ink mr-6 text-xs leading-relaxed">{turn.reply}</p>
       )}
@@ -66,7 +74,8 @@ function TurnBlock({ turn, sessionId }: { turn: Turn; sessionId: string }) {
         <StepCard key={step.id} index={index + 1} step={step} sessionId={sessionId} />
       ))}
 
-      <PlanActions turn={turn} sessionId={sessionId} />
+      {/* 没有步骤就没有可确认、可取消、可重试的东西：规划阶段就失败的那一轮只能看错误文字 */}
+      {chatting || !turn.steps.length ? null : <PlanActions turn={turn} sessionId={sessionId} />}
     </div>
   )
 }

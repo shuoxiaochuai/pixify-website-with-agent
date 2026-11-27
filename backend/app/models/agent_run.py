@@ -1,3 +1,4 @@
+import enum
 import uuid
 
 from sqlalchemy import ForeignKey, Text
@@ -7,6 +8,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import UUIDBase, enum_column
 from app.models.tool_run import RunStatus
+
+
+class TurnKind(enum.StrEnum):
+    """一轮指令走的通道。chat 轮次没有计划与工具，只用于对话展示。"""
+
+    EDIT = "edit"
+    CHAT = "chat"
 
 
 class AgentRun(UUIDBase):
@@ -28,5 +36,6 @@ class AgentRun(UUIDBase):
     goal: Mapped[str] = mapped_column(Text)
     reply: Mapped[str] = mapped_column(Text, default="")
     plan: Mapped[list] = mapped_column(JSONB, default=list)
+    kind: Mapped[TurnKind] = mapped_column(enum_column(TurnKind), default=TurnKind.EDIT)
     status: Mapped[RunStatus] = mapped_column(enum_column(RunStatus))
     error: Mapped[str | None] = mapped_column(Text, default=None)

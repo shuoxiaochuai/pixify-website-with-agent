@@ -4,7 +4,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.models import AgentRun
+from app.models import AgentRun, TurnKind
 from app.models.tool_run import RunStatus
 from app.tools import label_of
 
@@ -49,6 +49,7 @@ class TurnOut(BaseModel):
     revision: int
     goal: str
     reply: str
+    kind: TurnKind = TurnKind.EDIT
     status: RunStatus
     error: str | None
     created_at: datetime
@@ -61,6 +62,7 @@ class TurnOut(BaseModel):
             revision=turn.revision,
             goal=turn.goal,
             reply=turn.reply,
+            kind=turn.kind,
             status=turn.status,
             error=turn.error,
             created_at=turn.created_at,

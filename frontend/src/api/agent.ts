@@ -19,11 +19,16 @@ export type PlanStep = {
   status: StepStatus
 }
 
+// 一轮指令走的通道：edit 会产计划并动画布，chat 只出一句话
+export type TurnKind = 'edit' | 'chat'
+
 export type Turn = {
   id: string
   revision: number
   goal: string
   reply: string
+  // 可选：后端没重启或命中旧缓存时该字段缺失，不能因此炸掉渲染
+  kind?: TurnKind
   status: RunStatus
   error: string | null
   created_at: string

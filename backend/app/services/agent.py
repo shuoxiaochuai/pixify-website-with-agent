@@ -8,9 +8,9 @@ from sqlalchemy.orm.attributes import flag_modified
 from app import agent
 from app.agent import plan as plan_mod
 from app.layers import Layer, LayerDocument, LayerKind
-from app.models import AgentRun, EditSession, ToolRun
+from app.models import AgentRun, EditSession, ToolRun, TurnKind
 from app.models.tool_run import RunStatus
-from app.services import assets, runs, selections, tools
+from app.services import runs, selections, tools
 from app.tools import spec_of
 
 logger = logging.getLogger(__name__)
@@ -32,49 +32,22 @@ class CannotRetry(Exception):
     pass
 
 
-async def describe(session: AsyncSession, record: EditSession) -> str:
-    """给规划模型的画布摘要，只给决策必需的事实。"""
-    document = LayerDocument.model_validate(record.document)
-    names = [_layer_name(layer) for layer in document.layers]
-    parts = [
-        f"画幅 {document.width}×{document.height}",
-        f"图层 {len(document.layers)} 个，自下而上（{'、'.join(names)}）",
-        "layer_id 填图层 id 或名字；不填则作用在选区下最上层图像，换背景作用在背景层",
-        f"修订号 {record.revision}",
-    ]
-
-    current = await assets.get_for_user(session, record.user_id, record.current_asset_id)
-    if current is not None:
-        parts.append(f"当前图 {current.image_format}{'，含透明通道' if current.has_alpha else ''}")
-
-    selected = await selections.get(record.id, record.revision)
-    if selected:
-        markers = selected.get("markers") or []
-        where = f"已有选区，{len(markers)} 个标点" if markers else "已有笔刷选区"
-        parts.append(f"{where}（选区只限定区域，不限定图层；与 layer_id 同时给出时取交集）")
-    else:
-        parts.append("当前无选区，区域工具会作用在整个图层")
-    return "；".join(parts)
-
-
-def _layer_name(layer: Layer) -> str:
-    text = f"文字「{layer.text[:8]}」" if layer.kind is LayerKind.TEXT and layer.text else None
-    name = f"{layer.id}={text or layer.name}"
-    return name if layer.visible else f"{name}·隐藏"
-
-
 async def respond(session: AsyncSession, record: EditSession, goal: str) -> AgentRun:
-    """规划一轮指令并落库。多步计划先停住等确认，单步直接开跑。"""
-    revision = record.revision
-    reply, steps, error = "", [], None
+    """规划一轮指令并落库。多步计划先停住等确认，单步直接开跑，无关提问只出一句话。"""
+    # rollback 会把 ORM 对象全部过期，先取成局部变量，失败轮次才不会因同步懒加载掩盖真实异常
+    user_id, session_id, revision = record.user_id, record.id, record.revision
+    reply, steps, kind, error = "", [], TurnKind.EDIT, None
 
     try:
-        reply, steps = await agent.run(goal, await describe(session, record))
-        steps = await _pin_selection(session, record, steps)
+        # 画布摘要传的是函数：闲聊通道不会调用它，也就完全不读画布与选区
+        reply, steps, channel = await agent.run(goal, lambda: describe(session, record))
+        kind = TurnKind(channel)
+        if steps:
+            steps = await _pin_selection(session, record, steps)
     except agent.PlannerUnavailable as exc:
         error = str(exc)
     except Exception:
-        logger.exception("指令规划异常 session_id=%s", record.id)
+        logger.exception("指令规划异常 session_id=%s", session_id)
         await session.rollback()
         error = "规划失败，请重试"
 
@@ -88,12 +61,13 @@ async def respond(session: AsyncSession, record: EditSession, goal: str) -> Agen
         status = RunStatus.SUCCEEDED
 
     turn = AgentRun(
-        user_id=record.user_id,
-        session_id=record.id,
+        user_id=user_id,
+        session_id=session_id,
         revision=revision,
         goal=goal,
         reply=reply,
         plan=steps,
+        kind=kind,
         status=status,
         error=error,
     )
@@ -104,6 +78,45 @@ async def respond(session: AsyncSession, record: EditSession, goal: str) -> Agen
     if turn.status is RunStatus.RUNNING:
         await _advance(session, turn)
     return turn
+
+
+async def describe(session: AsyncSession, record: EditSession) -> str:
+    """给规划模型看的画布摘要：画幅、修订号、图层清单与选区状态。
+
+    模型只能从这里抄 layer_id，也就只能改摘要里明确列出的图层，编不出「人物」「主体」这种名字。
+    """
+    document = (
+        LayerDocument.model_validate(record.document)
+        if record.document
+        else LayerDocument(width=0, height=0)
+    )
+    lines = [
+        f"画幅 {document.width}×{document.height}，修订号 {record.revision}。",
+        "图层：" + ("；".join(_line_of(layer) for layer in document.layers) or "无"),
+    ]
+    stored = await selections.get(record.id, record.revision)
+    if stored and stored.get("mask_asset_id"):
+        markers = len(stored.get("markers") or [])
+        lines.append(f"已有选区（标记点 {markers} 个）。" if markers else "已有选区。")
+    else:
+        lines.append("当前无选区。")
+    return "\n".join(lines)
+
+
+_KIND_LABEL = {"image": "图像", "text": "文字", "shape": "形状"}
+
+
+def _line_of(layer: Layer) -> str:
+    """一条图层描述。id、尺寸、文案与可见性都要列出，模型据此选目标。"""
+    kind = _KIND_LABEL.get(layer.kind.value, layer.kind.value)
+    bits = [f"{layer.name}（id={layer.id}", f"{kind} {layer.width}×{layer.height}"]
+    if layer.kind is LayerKind.TEXT and layer.text:
+        bits.append(f"文案「{layer.text}」")
+    if not layer.visible:
+        bits.append("隐藏")
+    if layer.locked:
+        bits.append("锁定")
+    return "，".join(bits) + "）"
 
 
 async def _pin_selection(

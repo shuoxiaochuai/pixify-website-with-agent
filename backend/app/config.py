@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     planner_model: str = "qwen-plus"
     # auto：有 rembg 用 rembg，否则四角抠图；测试强制 corner 以免下载模型
     matting_provider: str = "auto"
+    # 分流模型只判一个词，用不上规划能力，但必须是现役型号（qwen-turbo 已下线）
+    intent_model: str = "qwen-flash"
+    chat_model: str = "qwen-plus"
     # auto：有 rapidocr 则识别文字层；none 跳过；测试强制 none
     ocr_provider: str = "auto"
 

@@ -1,15 +1,24 @@
+"""指令分流与修图规划图。无关提问走 chat，修图请求才进 plan。"""
+
 import ast
+import logging
 import re
+from collections.abc import Awaitable, Callable
 from functools import lru_cache
 from typing import Literal, TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
+from app.agent.chat import answer
 from app.agent.llm import planner
 from app.agent.plan import PlanError, validate
+from app.agent.triage import CHAT, EDIT, classify
+from app.agent.words import plain, text_of
 from app.services import tools as tool_service
 from app.tools import SPECS, UnknownTool, label_of
+
+logger = logging.getLogger(__name__)
 
 _SYSTEM = """你是电商图片修图助手，通过调用工具完成用户的修图请求。
 
@@ -45,12 +54,12 @@ _SYSTEM = """你是电商图片修图助手，通过调用工具完成用户的�
 - 只能通过 function call 表达要做什么。回复文字里禁止出现任何工具名或参数名，
   禁止用「smart_edit 指令为…」这类句子描述你打算怎么调用。
 - 需要说话时只说一句给用户听的中文，不解释、不复述、不确认参数。
-  只有指令与修图无关、或现有工具确实做不到时，才用一句中文说明。
+  与修图无关的提问已经在上游分流到闲聊通道，送到你这里的都是修图请求；
+  现有工具确实做不到时，用一句中文说明做不到，不要推荐别的软件，也不要扯开话题。
 
 当前画布：{context}"""
 
 _FALLBACK_REPLY = "没太理解这条指令，换个说法或说得更具体一些。"
-_REFUSAL_LIMIT = 60
 
 _CONNECTORS = ("再", "然后", "接着", "并把", "同时", "最后", "之后", "顺便")
 _MAX_PLAN_TRIES = 2
@@ -73,13 +82,18 @@ _WRAPPED = (
     ("'", "'"),
 )
 
+# 画布摘要要查库，闲聊通道用不上，所以传取数函数而不是现成的字符串
+GetContext = Callable[[], Awaitable[str]]
+
 
 class AgentState(TypedDict):
     goal: str
-    context: str
+    context: GetContext
+    kind: str
     plan: list[dict]
     reply: str
     retries: int
+
 
 def _calls_from_text(text: str) -> list[dict]:
     """兼容模型偶尔写出的 tool(arg=...) 文本；只解析字面量，绝不 eval。"""
@@ -135,28 +149,6 @@ def _calls_from_text(text: str) -> list[dict]:
     return calls
 
 
-def _narrated(text: str) -> bool:
-    """回复里出现内部工具名，说明模型在描述调用而不是发起调用。"""
-    return any(spec.name in text for spec in SPECS)
-
-
-# 按句切分，保留标点，便于只丢掉描述调用的那几句
-_SENTENCE = re.compile(r"(?<=[。！？])|[\r\n]+")
-
-
-def _plain(reply: str) -> str:
-    """只留第一句不提内部工具名的话。
-
-    模型拒绝时会顺带点名工具解释原因（「replace_region 需要完整提示词」），
-    那种句子不能给用户看，但前面的正常说明要保住，不能整段作废。
-    """
-    for sentence in _SENTENCE.split((reply or "").strip()):
-        sentence = sentence.strip()
-        if sentence and not _narrated(sentence):
-            return _one_sentence(sentence)
-    return ""
-
-
 def _mentioned_tools(text: str) -> list[str]:
     """散文里提到了哪几个已注册工具名。"""
     return [spec.name for spec in SPECS if spec.name in text]
@@ -193,9 +185,17 @@ def _calls_from_prose(text: str) -> list[dict]:
     return [{"tool": name, "params": {field: instruction}}]
 
 
+async def _triage(state: AgentState) -> AgentState:
+    """先分通道：无关提问不进规划模型，也就不占工具上下文。"""
+    kind = await classify(state["goal"])
+    # 手动测试时靠这行确认走的是哪条通道
+    logger.info("指令分流 kind=%s goal=%s", kind, state["goal"][:40])
+    return {"kind": kind}
+
+
 async def _plan(state: AgentState) -> AgentState:
     messages = [
-        SystemMessage(_SYSTEM.format(context=state["context"])),
+        SystemMessage(_SYSTEM.format(context=await state["context"]())),
         HumanMessage(state["goal"]),
     ]
     # temperature=0，重试必须换个输入，否则得到一模一样的单个调用
@@ -211,7 +211,7 @@ async def _plan(state: AgentState) -> AgentState:
 
     message = await planner().ainvoke(messages)
 
-    reply = _text_of(message)
+    reply = text_of(message)
 
     # 正常情况：模型返回结构化工具调用
     plan = [
@@ -242,12 +242,22 @@ async def _plan(state: AgentState) -> AgentState:
     }
 
 
+async def _chat(state: AgentState) -> AgentState:
+    """只出一句话，不产计划：这一轮没有步骤，也就没有确认、执行与编辑历史。"""
+    return {"kind": CHAT, "reply": await answer(state["goal"]), "plan": []}
+
+
 def _verify(state: AgentState) -> AgentState:
     """模型给出的计划一律经服务端校验，不可直接执行。"""
     try:
         return {"plan": validate(state["plan"])}
     except (UnknownTool, tool_service.InvalidParams, PlanError) as exc:
         return {"plan": [], "reply": f"这一步暂时执行不了：{exc}"}
+
+
+def _channel(state: AgentState) -> Literal["plan", "chat"]:
+    """分流结果决定这一轮进规划节点还是闲聊节点。"""
+    return "chat" if state["kind"] == CHAT else "plan"
 
 
 def _route(state: AgentState) -> Literal["plan", "__end__"]:
@@ -265,26 +275,33 @@ def _route(state: AgentState) -> Literal["plan", "__end__"]:
 @lru_cache
 def _graph():
     builder = StateGraph(AgentState)
+    builder.add_node("triage", _triage)
     builder.add_node("plan", _plan)
     builder.add_node("verify", _verify)
+    builder.add_node("chat", _chat)
 
-    builder.add_edge(START, "plan")
+    builder.add_edge(START, "triage")
+    builder.add_conditional_edges("triage", _channel, {"plan": "plan", "chat": "chat"})
     builder.add_edge("plan", "verify")
     builder.add_conditional_edges("verify", _route, {"plan": "plan", END: END})
+    builder.add_edge("chat", END)
     return builder.compile()
 
 
-async def run(goal: str, context: str) -> tuple[str, list[dict]]:
-    """规划并校验一轮指令，返回答复与尚未下发的计划。"""
+async def run(goal: str, context: GetContext) -> tuple[str, list[dict], str]:
+    """规划一轮指令，返回（答复，尚未下发的计划，走的通道）。"""
     state = await _graph().ainvoke(
-        {"goal": goal, "context": context, "plan": [], "reply": "", "retries": 0}
+        {"goal": goal, "context": context, "kind": EDIT, "plan": [], "reply": "", "retries": 0}
     )
-    return spoken(state["reply"], state["plan"]), state["plan"]
+    if state["kind"] == CHAT:
+        # 闲聊的话术已经组织好了，不再走步骤标签兜底
+        return state["reply"], [], CHAT
+    return spoken(state["reply"], state["plan"]), state["plan"], EDIT
 
 
 def spoken(reply: str, plan: list[dict]) -> str:
     """有计划就按步骤说话；没计划才用兜底或截成一句拒绝。"""
-    text = _plain(reply)
+    text = plain(reply)
     if plan:
         labels = "、".join(label_of(step["tool"], step.get("params")) for step in plan)
         if text and text != _FALLBACK_REPLY:
@@ -293,21 +310,3 @@ def spoken(reply: str, plan: list[dict]) -> str:
             return f"将按以下步骤执行：{labels}。确认后开始。"
         return f"好，正在{labels}。"
     return text or _FALLBACK_REPLY
-
-
-def _one_sentence(text: str) -> str:
-    for sep in ("。", "！", "？", "\n"):
-        head, found, _ = text.partition(sep)
-        if found and head.strip():
-            return head.strip() + (sep if sep != "\n" else "。")
-    if len(text) > _REFUSAL_LIMIT:
-        return text[:_REFUSAL_LIMIT].rstrip() + "…"
-    return text
-
-
-def _text_of(message: AIMessage) -> str:
-    if isinstance(message.content, str):
-        return message.content.strip()
-    return "".join(
-        block.get("text", "") for block in message.content if isinstance(block, dict)
-    ).strip()
