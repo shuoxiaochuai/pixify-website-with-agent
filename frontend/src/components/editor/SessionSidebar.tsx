@@ -5,6 +5,7 @@ import AgentConversation from '@/components/editor/AgentConversation'
 import MessageComposer from '@/components/editor/MessageComposer'
 import Button from '@/components/ui/Button'
 import { buttonClass } from '@/components/ui/buttonStyles'
+import TrashIcon from '@/components/ui/TrashIcon'
 import { useSendMessage, useTurns } from '@/hooks/useAgent'
 import { errorMessage } from '@/hooks/useAuth'
 import { useDeleteSession, useSessions } from '@/hooks/useSessions'
@@ -145,20 +146,5 @@ function SessionList({ activeId }: { activeId: string }) {
         </li>
       ))}
     </ul>
-  )
-}
-
-function TrashIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d="M2.5 4h11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      <path d="M6 2.5h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      <path
-        d="M4 4l.7 8.3a1.3 1.3 0 0 0 1.3 1.2h4a1.3 1.3 0 0 0 1.3-1.2L12 4"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        strokeLinejoin="round"
-      />
-    </svg>
   )
 }

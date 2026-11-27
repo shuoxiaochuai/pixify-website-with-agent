@@ -57,6 +57,21 @@ export function useSendMessage(sessionId: string) {
   })
 }
 
+export function useDeleteTurn(sessionId: string) {
+  const queryClient = useQueryClient()
+  const refresh = useRefreshTurn(sessionId)
+  return useMutation({
+    mutationFn: (turnId: string) => agentApi.remove(sessionId, turnId),
+    onSuccess: (_data, turnId) => {
+      // 删掉的若是正在流过程事件的那一轮，先把挂在它上的残留帧一并丢掉
+      queryClient.setQueryData<Turn[]>(turnsKey(sessionId), (current) =>
+        current?.filter((item) => item.id !== turnId),
+      )
+      refresh()
+    },
+  })
+}
+
 // 一轮指令跑到哪了：阶段文案、已报出的步骤名、正文增量、以及分流结果
 export type TurnLive = {
   stages: string[]

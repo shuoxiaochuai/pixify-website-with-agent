@@ -14,8 +14,10 @@ from app.agent.triage import CHAT, EDIT
 from app.agent.words import brief
 from app.config import get_settings
 from app.db import SessionFactory
-from app.models import AgentRun, EditSession
+from app.models import AgentRun, EditSession, ToolRun
+from app.models.tool_run import RunStatus
 from app.services import agent as agent_service
+from app.services import runs as runs_service
 from app.tasks.tools import run_tool
 from app.tools import label_of
 from tests.canvas import apply, drain, error_of, layers, scene, select, settle
@@ -1085,6 +1087,79 @@ async def test_cancel_drops_unstarted_steps(signed_in: httpx.AsyncClient, fake_p
     assert canceled["status"] == "canceled"
     assert [step["status"] for step in canceled["steps"]] == ["canceled", "canceled"]
     assert session["document"]["layers"][0]["transform"]["scale_x"] == 1
+
+
+async def test_cancel_also_stops_a_running_step(signed_in: httpx.AsyncClient, fake_planner):
+    """取消不再只划掉没开跑的：进行中的任务也要落定，并给 worker 递中止信号。"""
+    fake_planner(tool_call("generate_image", PROMPT))
+    session_id = (await open_session(signed_in))["id"]
+    turn = await send(signed_in, session_id, "换一张白底马克杯")
+    run_id = uuid.UUID(turn["steps"][0]["run_id"])
+
+    # 模拟 worker 已把任务领走开跑
+    async with SessionFactory() as db:
+        assert await runs_service.start(db, await db.get(ToolRun, run_id))
+
+    canceled = (
+        await signed_in.post(f"/api/sessions/{session_id}/messages/{turn['id']}/cancel")
+    ).json()
+    assert canceled["status"] == "canceled"
+    assert [step["status"] for step in canceled["steps"]] == ["canceled"]
+    assert (await signed_in.get(f"/api/runs/{run_id}")).json()["status"] == "canceled"
+
+    # 中止信号已写进 arq 的集合，worker 轮询到就会掐断正在跑的那个任务
+    from arq.constants import abort_jobs_ss
+
+    members = await events.redis_client().zrange(abort_jobs_ss, 0, -1)
+    assert str(run_id) in members
+
+    # 抢在掐断前跑完的迟到结果不能复活已取消的任务，也不许写回画布
+    async with SessionFactory() as db:
+        late = await db.get(ToolRun, run_id)
+        assert await runs_service.finish(db, late, status=RunStatus.SUCCEEDED, result={}) is False
+        await db.refresh(late)
+        assert late.status is RunStatus.CANCELED
+
+    # worker 之后才收到这个任务时直接跳过，不会二次执行
+    await run_tool({}, run_id)
+    assert (await signed_in.get(f"/api/runs/{run_id}")).json()["status"] == "canceled"
+
+
+async def test_delete_message_removes_only_that_turn(signed_in: httpx.AsyncClient, fake_planner):
+    """删除单条对话：只少这一轮，别的轮次原样留着。"""
+    fake_planner(AIMessage(content="现有工具做不到这个。"))
+    session_id = (await open_session(signed_in))["id"]
+    first = await send(signed_in, session_id, "第一条")
+    second = await send(signed_in, session_id, "第二条")
+
+    response = await signed_in.delete(f"/api/sessions/{session_id}/messages/{first['id']}")
+    assert response.status_code == 204
+
+    remaining = (await signed_in.get(f"/api/sessions/{session_id}/messages")).json()
+    assert [item["id"] for item in remaining] == [second["id"]]
+
+    missing = await signed_in.delete(f"/api/sessions/{session_id}/messages/{first['id']}")
+    assert missing.status_code == 404
+
+
+async def test_delete_message_cancels_its_open_step(signed_in: httpx.AsyncClient, fake_planner):
+    """删掉还在跑的那一轮：排队中的任务一并取消，不能删完消息图还在偷偷生成。"""
+    fake_planner(tool_call("generate_image", PROMPT))
+    session_id = (await open_session(signed_in))["id"]
+    turn = await send(signed_in, session_id, "换一张白底马克杯")
+    run_id = uuid.UUID(turn["steps"][0]["run_id"])
+
+    response = await signed_in.delete(f"/api/sessions/{session_id}/messages/{turn['id']}")
+    assert response.status_code == 204
+    assert (await signed_in.get(f"/api/sessions/{session_id}/messages")).json() == []
+
+    fetched = (await signed_in.get(f"/api/runs/{run_id}")).json()
+    assert fetched["status"] == "canceled"
+
+    from arq.constants import abort_jobs_ss
+
+    members = await events.redis_client().zrange(abort_jobs_ss, 0, -1)
+    assert str(run_id) in members
 
 
 async def test_failed_step_can_be_retried(signed_in: httpx.AsyncClient, fake_planner):

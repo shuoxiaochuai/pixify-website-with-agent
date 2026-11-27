@@ -282,6 +282,18 @@ async def send_message(
     return TurnOut.of(await agent_service.respond(session, record, payload.text))
 
 
+@router.delete("/{session_id}/messages/{turn_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_message(
+    session_id: uuid.UUID, turn_id: uuid.UUID, user: CurrentUser, session: SessionDep
+) -> None:
+    """删掉一条对话。还在跑的轮次先取消再删；已落定的画布改动不回退，要回退用撤销。"""
+    record = await _load(session, user, session_id)
+    try:
+        await agent_service.remove_turn(session, record, turn_id)
+    except TurnNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "对话不存在") from exc
+
+
 @router.post("/{session_id}/messages/{turn_id}/confirm")
 async def confirm_plan(
     session_id: uuid.UUID, turn_id: uuid.UUID, user: CurrentUser, session: SessionDep
@@ -299,6 +311,7 @@ async def confirm_plan(
 async def cancel_plan(
     session_id: uuid.UUID, turn_id: uuid.UUID, user: CurrentUser, session: SessionDep
 ) -> TurnOut:
+    """取消这一轮：排队与正在跑的任务都停掉，不用硬等读条跑完。"""
     record = await _load(session, user, session_id)
     try:
         return TurnOut.of(await agent_service.cancel(session, record, turn_id))

@@ -1,11 +1,18 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import type { PlanStep, StepStatus, Turn } from '@/api/agent'
 import { isTerminal } from '@/api/runs'
 import Button from '@/components/ui/Button'
 import ProgressBar from '@/components/ui/ProgressBar'
-import { usePlanActions, useTurnStream, useTurns, type TurnLive } from '@/hooks/useAgent'
+import TrashIcon from '@/components/ui/TrashIcon'
+import {
+  useDeleteTurn,
+  usePlanActions,
+  useTurnStream,
+  useTurns,
+  type TurnLive,
+} from '@/hooks/useAgent'
 import { useRun } from '@/hooks/useRun'
 
 const STEP_LABEL: Record<StepStatus, string> = {
@@ -20,6 +27,9 @@ const STEP_LABEL: Record<StepStatus, string> = {
 
 export default function AgentConversation({ sessionId }: { sessionId: string }) {
   const { data: turns = [], isPending } = useTurns(sessionId)
+  const deleteTurn = useDeleteTurn(sessionId)
+  // 一次只让一条处在待确认删除状态，确认条直接顶掉那一轮，不弹窗
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
   const end = useRef<HTMLDivElement>(null)
   const latest = turns.at(-1)
   // 后台跑完才落库，最新一轮既没答复也没计划的那几秒才值得看过程
@@ -56,6 +66,13 @@ if (turns.length === 0) {
           turn={turn}
           sessionId={sessionId}
           live={turn.id === liveId ? live : null}
+          pendingDelete={turn.id === pendingDelete}
+          deleting={deleteTurn.isPending}
+          onAskDelete={() => setPendingDelete(turn.id)}
+          onCancelDelete={() => setPendingDelete(null)}
+          onDelete={() =>
+            deleteTurn.mutate(turn.id, { onSuccess: () => setPendingDelete(null) })
+          }
         />
       ))}
       <div ref={end} />
@@ -67,20 +84,54 @@ function TurnBlock({
   turn,
   sessionId,
   live,
+  pendingDelete,
+  deleting,
+  onAskDelete,
+  onCancelDelete,
+  onDelete,
 }: {
   turn: Turn
   sessionId: string
   live: TurnLive | null
+  pendingDelete: boolean
+  deleting: boolean
+  onAskDelete: () => void
+  onCancelDelete: () => void
+  onDelete: () => void
 }) {
+  if (pendingDelete) {
+    return (
+      <div className="border-line bg-soft animate-fade-in flex flex-col gap-1.5 rounded-chip border px-2.5 py-2">
+        <p className="text-muted text-[11px] leading-snug">
+          删除这条对话？还在跑的任务会一并取消；已落定的画布改动不回退，要回退用撤销。
+        </p>
+        <div className="flex justify-end gap-1">
+          <Button size="sm" disabled={deleting} onClick={onCancelDelete}>
+            取消
+          </Button>
+          <Button size="sm" variant="solid" disabled={deleting} onClick={onDelete}>
+            {deleting ? '删除中' : '确认删除'}
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   // 闲聊轮没有步骤、没有确认，也不该长得像一次执行结果：分流一确定就换样式
   const chatting = (live?.kind ?? turn.kind) === 'chat'
   const reply = turn.reply || live?.text || ''
 
   return (
-    <div className="space-y-2">
+    <div className="group relative space-y-2">
       <p className="bg-brand-soft text-brand-strong ml-6 rounded-[12px] px-3 py-2 text-xs leading-relaxed">
         {turn.goal}
       </p>
+      {/* 悬停才显现，不跟正文抢视线；键盘聚焦到时也要看得见 */}
+      <span className="absolute right-0 top-0 z-10 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100">
+        <Button size="sm" variant="icon" title="删除这条对话" onClick={onAskDelete}>
+          <TrashIcon />
+        </Button>
+      </span>
 
       {live && <Thinking stages={live.stages} steps={live.steps} />}
 
@@ -160,8 +211,9 @@ function PlanActions({ turn, sessionId }: { turn: Turn; sessionId: string }) {
   if (turn.status === 'running') {
     return (
       <div className="mr-6">
+        {/* 后端现在连正在跑的任务一起停，不用硬等读条跑完 */}
         <Action disabled={actions.busy} onClick={() => actions.cancel(turn.id)}>
-          取消后续
+          取消任务
         </Action>
       </div>
     )

@@ -50,6 +50,9 @@ export const agentApi = {
   turns: (sessionId: string) => api.get<Turn[]>(`/sessions/${sessionId}/messages`),
   send: (sessionId: string, text: string) =>
     api.post<Turn>(`/sessions/${sessionId}/messages`, { text }),
+  // 删单条对话：还在跑的那一轮后端会先取消再删，已落定的画布改动不回退
+  remove: (sessionId: string, turnId: string) =>
+    api.delete<void>(`/sessions/${sessionId}/messages/${turnId}`),
   confirm: (sessionId: string, turnId: string) =>
     api.post<Turn>(`/sessions/${sessionId}/messages/${turnId}/confirm`),
   cancel: (sessionId: string, turnId: string) =>

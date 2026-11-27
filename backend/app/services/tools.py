@@ -53,10 +53,14 @@ async def submit(
 
 async def execute(session: AsyncSession, run: ToolRun) -> None:
     """统一的执行外壳：状态流转与失败兜底集中在此，具体工具只返回结果。"""
+    if not await runs.start(session, run):
+        return  # 排队期间已被取消，整轮也已由取消方结算，不再推进
     try:
         spec = spec_of(run.tool)
-        await runs.start(session, run)
         result = await spec.handler(session, run)
+        # 跑到一半被取消：结果不上画布、不推进后续步骤，取消方已经把整轮结算完
+        if await runs.canceled(session, run):
+            return
         await _record(session, run, result)
     except (ProviderError, UnknownTool, ToolError) as exc:
         await runs.finish(session, run, status=RunStatus.FAILED, error=str(exc))

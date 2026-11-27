@@ -39,6 +39,9 @@ class CannotRetry(Exception):
 # 后台在跑的规划任务。测试等它们跑完再断言，不需要额外轮询
 pending_tasks: set[asyncio.Task] = set()
 
+# turn id → 还在规划阶段的任务：删除轮次时顺手掐断，别让它规划完再把步骤提交出去
+planning_tasks: dict[uuid.UUID, asyncio.Task] = {}
+
 
 async def respond(session: AsyncSession, record: EditSession, goal: str) -> AgentRun:
     """先落一条进行中的空轮次立刻返回，规划与执行交给后台逐段推事件。
@@ -57,14 +60,17 @@ async def respond(session: AsyncSession, record: EditSession, goal: str) -> Agen
     await session.refresh(turn)
 
     # 任务里另开一个 session：请求作用域的连接在响应返回时就关了
-    _spawn(_guard(_plan_turn(turn.id, record.id, goal)))
+    _spawn(_guard(_plan_turn(turn.id, record.id, goal)), turn.id)
     return turn
 
 
-def _spawn(coro: Coroutine) -> None:
+def _spawn(coro: Coroutine, turn_id: uuid.UUID | None = None) -> None:
     task = asyncio.create_task(coro)
     pending_tasks.add(task)
     task.add_done_callback(pending_tasks.discard)
+    if turn_id is not None:
+        planning_tasks[turn_id] = task
+        task.add_done_callback(lambda _done, key=turn_id: planning_tasks.pop(key, None))
 
 
 async def _guard(coro: Coroutine) -> None:
@@ -256,16 +262,36 @@ async def confirm(session: AsyncSession, record: EditSession, turn_id: uuid.UUID
 
 
 async def cancel(session: AsyncSession, record: EditSession, turn_id: uuid.UUID) -> AgentRun:
+    """取消这一轮：排队与正在跑的任务都停掉，没开跑的步骤直接划掉。"""
     turn = await _get(session, record, turn_id)
     if turn.status.is_terminal:
         raise CannotCancel
-    turn.plan = plan_mod.cancel_remaining(_copy(turn.plan))
-    await _cancel_queued_runs(session, turn.plan)
+    steps = plan_mod.cancel_remaining(_copy(turn.plan))
+    await _cancel_open_runs(session, steps)
+    turn.plan = steps
     _touch(turn)
-    turn.status = RunStatus(plan_mod.settle(turn.plan))
+    turn.status = RunStatus(plan_mod.settle(steps))
     await session.commit()
     await session.refresh(turn)
     return turn
+
+
+async def remove_turn(session: AsyncSession, record: EditSession, turn_id: uuid.UUID) -> None:
+    """删掉一条对话。
+
+    还在跑的轮次先停掉：规划中的任务直接掐断，排队与执行中的工具任务走取消，
+    然后删行。本轮已落定的画布改动不回退——要回退用撤销。
+    """
+    turn = await _get(session, record, turn_id)
+    task = planning_tasks.pop(turn.id, None)
+    if task is not None:
+        task.cancel()
+        # 等它真正停下来再读计划：掐断前它可能已经把步骤提交出去了
+        await asyncio.gather(task, return_exceptions=True)
+        await session.refresh(turn)
+    await _cancel_open_runs(session, _copy(turn.plan))
+    await session.delete(turn)
+    await session.commit()
 
 
 async def retry(session: AsyncSession, record: EditSession, turn_id: uuid.UUID) -> AgentRun:
@@ -348,15 +374,20 @@ async def _advance(session: AsyncSession, turn: AgentRun) -> AgentRun:
     return turn
 
 
-async def _cancel_queued_runs(session: AsyncSession, steps: list[dict]) -> None:
+async def _cancel_open_runs(session: AsyncSession, steps: list[dict]) -> None:
+    """把排队与正在跑的工具任务都取消掉，步骤状态跟着落定。
+
+    正在跑的那个（如读到一半的智能修图）先落库已取消、再给 worker 递中止信号；
+    worker 侧有配套守卫，迟到的结果不会写回画布。
+    """
     for step in steps:
-        if not step.get("run_id") or step["status"] != plan_mod.QUEUED:
+        if not step.get("run_id") or step["status"] not in {plan_mod.QUEUED, plan_mod.RUNNING}:
             continue
         run = await session.get(ToolRun, uuid.UUID(step["run_id"]))
-        if run is None or run.status is not RunStatus.QUEUED:
+        if run is None or run.status.is_terminal:
             continue
-        await runs.finish(session, run, status=RunStatus.CANCELED, error="已取消")
-        step["status"] = plan_mod.CANCELED
+        if await runs.cancel(session, run):
+            step["status"] = plan_mod.CANCELED
 
 
 async def _get(session: AsyncSession, record: EditSession, turn_id: uuid.UUID) -> AgentRun:
