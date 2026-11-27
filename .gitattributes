@@ -8,8 +8,10 @@ Dockerfile text eol=lf
 *.yml text eol=lf
 docker-compose.yml text eol=lf
 
-# PowerShell 脚本统一 CRLF。注意 git 与多数编辑器（包括本次的文件写入）保存时不会
-# 补 BOM，所以 deploy.ps1 的字符串必须保持纯 ASCII —— 中文交给 GBK 误读会吞掉闭合引号。
+# PowerShell 脚本统一 CRLF。但注意：CRLF 只能「掩盖」编码问题，不能解决它。
+# PowerShell 5.1 读无 BOM 文件时用系统 ANSI 码页（CP936），中文字节会把后面一个字节
+# 当非法尾字节一起吃掉 —— 吃掉引号会报错在别行，吃掉行尾换行符会让注释吞掉下一行代码。
+# 所以 deploy.ps1 必须整个文件纯 ASCII（注释也算），不能只保证字符串纯 ASCII。
 *.ps1 text eol=crlf
 
 # 源码与文档统一按换行符做 diff，避免行尾差异污染变更记录

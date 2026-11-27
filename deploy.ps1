@@ -1,16 +1,20 @@
-# 裸机部署推送脚本（本地 Windows 侧运行，配合服务器上的 deploy/bootstrap.sh）
+# deploy.ps1 - push local changes to the bare-metal server.
+# Server side counterpart: deploy/bootstrap.sh
 #
-# 编码约束：本文件的字符串一律只用 ASCII，中文只写在注释里。
-# 原因是 Windows PowerShell 5.1 读取无 BOM 文件时使用系统 ANSI 码页（GBK），
-# 中文字节的最后一个往往是 GBK 前导字节，会把紧随其后的闭合引号当配对尾字节吞掉，
-# 于是字符串不再闭合，报出一堆假的 "&& 不是有效语句分隔符"，且报错行号远离真正的元凶。
-# 换行符不是合法的 GBK 尾字节，所以注释里的中文怎么乱码都不会破坏语法结构。
-# 验证方法（改完必跑）：
+# ENCODING RULE: this file must stay 100% ASCII, comments included.
+# Windows PowerShell 5.1 reads a BOM-less file with the system ANSI codepage (CP936 here).
+# A UTF-8 Chinese char ends in a byte that CP936 treats as a lead byte, so the decoder
+# swallows the NEXT byte as an invalid trail byte - a closing quote, or even the newline
+# at the end of a comment line. Lines then merge, braces get orphaned, and the reported
+# line numbers point far away from the real cause.
+# CRLF masks this (the \r gets swallowed instead of the \n) and a BOM masks it too, but
+# both depend on editors behaving, so neither is a fix. ASCII-only is the only fix.
+# Self-check after every edit:
 #   $e=$null; [Management.Automation.Language.Parser]::ParseFile("$PWD\deploy.ps1",[ref]$null,[ref]$e); $e
 param([switch]$Backend,[switch]$Frontend,[switch]$Env,[switch]$Migrate,[switch]$Sync,[switch]$Clean,[switch]$Up,[switch]$DryRun,[string]$Server="root@sh03-ssh.gpuhome.cc",[int]$Port=30245,[string]$Remote="/root/rivermind-data/ai-picture-editor")
 
-# 不能设 Stop：ssh/scp 的正常输出与进度全走 stderr，5.1 会把它当异常抛出，脚本会半途死掉。
-# 因此每条命令后显式判退出码。
+# Never set Stop here: ssh and scp write normal progress to stderr, and 5.1 would turn
+# that into a terminating error. Every command is checked through $LASTEXITCODE instead.
 $ErrorActionPreference = "Continue"
 
 function Step([string]$m) { Write-Host ("==> " + $m) -ForegroundColor Cyan }
@@ -22,7 +26,7 @@ function Invoke-Remote([string]$cmd, [string]$why) {
     if ($LASTEXITCODE -ne 0) { Fail ($why + " (ssh exit " + $LASTEXITCODE + ")") }
 }
 
-# DryRun 必须同时挡住 scp，否则"只想看看"会把 .env 真的推上去
+# DryRun must block scp as well, otherwise a preview would really upload .env
 function Invoke-Scp([string]$src, [string]$dst, [string]$why) {
     if ($DryRun) { Write-Host ("  [dry-run] scp " + $src + " -> " + $dst) -ForegroundColor DarkGray; return }
     scp -P $Port $src $dst
@@ -52,7 +56,8 @@ if ($Backend) {
 
     $stamp = Get-Date -Format "MMdd-HHmm"
     if ($Clean) {
-        # 破坏性操作：先确认远端那份 tarball 完整可读，再删旧代码
+        # Destructive: verify the uploaded tarball is readable BEFORE deleting the old code.
+        # The whole remote chain ends with && echo, so any failure gives a non-zero exit.
         $apply = "tar -tzf /tmp/ape-code.tgz > /dev/null && rm -rf backend/app backend/migrations && tar xzf /tmp/ape-code.tgz"
     } else {
         $apply = "tar xzf /tmp/ape-code.tgz"
@@ -62,7 +67,11 @@ if ($Backend) {
     Invoke-Remote ("cd " + $Remote + " && cp -a backend/app /tmp/app.bak-" + $stamp + " && " + $apply + " && find backend -name __pycache__ -type d -exec rm -rf {} + && echo CODE_UPDATED") ("extract failed, previous code is in /tmp/app.bak-" + $stamp)
 }
 
-if ($Sync) { Invoke-Remote ("bash -lc 'cd " + $Remote + "/backend && uv sync --all-extras'") "uv sync failed" }
+# Source /etc/retouch/env explicitly: bash -lc would only find uv if ~/.profile happens to
+# chain into ~/.bashrc, and without UV_CACHE_DIR uv writes its cache to the small system
+# disk (/root/.cache/uv) which does not travel with the data disk.
+$syncCmd = 'set -a; . /etc/retouch/env; set +a; cd ' + $Remote + '/backend && "$UV" sync --all-extras'
+if ($Sync) { Invoke-Remote $syncCmd "uv sync failed" }
 
 if ($Migrate) { Invoke-Remote ("cd " + $Remote + "/backend && .venv/bin/alembic heads && .venv/bin/alembic current && .venv/bin/alembic upgrade head && .venv/bin/alembic current") "migration failed" }
 
@@ -70,7 +79,7 @@ if ($Env) {
     if (-not (Test-Path .env)) { Fail "no local .env" }
     if (Select-String -Path ".env" -Pattern "dev-only-secret" -Quiet) { Fail "local JWT_SECRET is still the template default, generate a random one first" }
     if ($DryRun) {
-        # 上传与比对是一件事，只预览就预览整件事，不去 diff 一个没上传的旧文件
+        # Upload and diff are one action; a preview previews the whole thing
         Write-Host ("  [dry-run] scp .env -> " + $Server + ":/tmp/env.new, diff against the server copy, then ask y/N before install -m 600") -ForegroundColor DarkGray
     } else {
         Invoke-Scp ".env" ($Server + ":/tmp/env.new") "env upload failed"
@@ -97,8 +106,9 @@ if ($Frontend) {
         if ($LASTEXITCODE -ne 0) { Fail "dist pack failed" }
     }
     Invoke-Scp (Join-Path $env:TEMP "ape-dist.tgz") ($Server + ":/tmp/ape-dist.tgz") "dist upload failed"
-    # 先解到 dist.new 再原子换名；首次部署时没有 dist，if/fi 保证不误报
+    # Extract into dist.new then swap names; on a first deploy there is no dist yet,
+    # so the if/fi guard keeps the && chain from breaking.
     Invoke-Remote ("cd " + $Remote + "/frontend && rm -rf dist.new && mkdir dist.new && tar -C dist.new -xzf /tmp/ape-dist.tgz && if [ -d dist ]; then mv dist dist.old; fi && mv dist.new/dist dist && rm -rf dist.old && echo DIST_UPDATED") "dist swap failed, previous copy may be in dist.old"
 }
 
-Invoke-Remote "retouch restart; sleep 8; retouch status; retouch health; ps -o args= -C postgres | head -1" "restart failed, run manually: retouch status; retouch logs app"
+Invoke-Remote "retouch restart; sleep 8; retouch status; retouch health; ps -o args= -C postgres | head -1" "restart failed, run manually: retouch status; tail -n 60 /var/log/retouch/app.log"
