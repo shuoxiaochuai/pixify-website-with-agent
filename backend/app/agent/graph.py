@@ -3,13 +3,15 @@
 import ast
 import logging
 import re
+import uuid
 from collections.abc import Awaitable, Callable
-from functools import lru_cache
 from typing import Literal, TypedDict
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
+from app.agent import checkpoint
 from app.agent.chat import answer
 from app.agent.llm import planner
 from app.agent.plan import PlanError, validate
@@ -113,8 +115,6 @@ async def _silent(event: dict) -> None:
 
 class AgentState(TypedDict):
     goal: str
-    context: GetContext
-    emit: Emit
     kind: str
     # 拆句后各通道的输入。单通道时其中一个就是整句原话，另一个为空
     edit_goal: str
@@ -124,6 +124,65 @@ class AgentState(TypedDict):
     plan: list[dict]
     reply: str
     retries: int
+
+
+# 检查点只存可序列化的业务状态。画布摘要与事件回调按线程号从内存登记表取，
+# 不写进快照；进程重启后由恢复流程重新构造这两个依赖。
+_PROVIDERS: dict[str, tuple[GetContext, Emit]] = {}
+
+
+def _config(thread_id: str) -> RunnableConfig:
+    return {"configurable": {"thread_id": thread_id}}
+
+
+def _thread_of(config: RunnableConfig) -> str:
+    return str((config.get("configurable") or {}).get("thread_id") or "")
+
+
+async def _unknown_context() -> str:
+    return "（画布摘要暂时不可用，按已保存的步骤继续。）"
+
+
+def _provider(config: RunnableConfig) -> tuple[GetContext, Emit]:
+    return _PROVIDERS.get(_thread_of(config), (_unknown_context, _silent))
+
+
+async def _invoke(
+    graph,
+    payload: AgentState | None,
+    thread_id: str,
+    context: GetContext,
+    emit: Emit,
+) -> AgentState:
+    """登记依赖后进图：节点只认线程号，检查点里不会出现函数对象。"""
+    _PROVIDERS[thread_id] = (context, emit)
+    try:
+        return await graph.ainvoke(payload, config=_config(thread_id))
+    finally:
+        _PROVIDERS.pop(thread_id, None)
+
+
+def _initial(goal: str) -> AgentState:
+    return {
+        "goal": goal,
+        "kind": EDIT,
+        "edit_goal": goal,
+        "chat_goal": "",
+        "chat_reply": "",
+        "plan": [],
+        "reply": "",
+        "retries": 0,
+    }
+
+
+def _outcome(state: AgentState) -> tuple[str, list[dict], str]:
+    if state["kind"] == CHAT:
+        # 闲聊的话术已经组织好了，不再走步骤标签兜底
+        return state["chat_reply"], [], CHAT
+    if state["kind"] == MIXED:
+        reply = merged(state["chat_reply"], spoken(state["reply"], state["plan"]))
+        return reply, state["plan"], MIXED
+    return spoken(state["reply"], state["plan"]), state["plan"], EDIT
 
 
 def _calls_from_text(text: str) -> list[dict]:
@@ -216,9 +275,9 @@ def _calls_from_prose(text: str) -> list[dict]:
     return [{"tool": name, "params": {field: instruction}}]
 
 
-async def _triage(state: AgentState) -> AgentState:
+async def _triage(state: AgentState, config: RunnableConfig) -> AgentState:
     """先分通道：无关提问不进规划模型，也就不占工具上下文。"""
-    emit = state["emit"]
+    emit = _provider(config)[1]
     await emit({"type": "stage", "text": _STAGES["triage"]})
 
     # 明显可拆才拆。拆不动就退回原来的单通道判定，行为与改动前一致
@@ -243,10 +302,11 @@ def _edit_goal_of(state: AgentState) -> str:
     return state["edit_goal"] or state["goal"]
 
 
-async def _plan(state: AgentState) -> AgentState:
+async def _plan(state: AgentState, config: RunnableConfig) -> AgentState:
     goal = _edit_goal_of(state)
+    context, emit = _provider(config)
     messages = [
-        SystemMessage(_SYSTEM.format(context=await state["context"]())),
+        SystemMessage(_SYSTEM.format(context=await context())),
         HumanMessage(goal),
     ]
     # temperature=0，重试必须换个输入，否则得到一模一样的单个调用
@@ -262,7 +322,6 @@ async def _plan(state: AgentState) -> AgentState:
 
     message = AIMessageChunk(content="")
     announced = 0
-    emit = state["emit"]
     if state["retries"]:
         await emit({"type": "stage", "text": _STAGES["replan"]})
 
@@ -314,14 +373,15 @@ async def _plan(state: AgentState) -> AgentState:
     }
 
 
-async def _chat(state: AgentState) -> AgentState:
+async def _chat(state: AgentState, config: RunnableConfig) -> AgentState:
     """只出一句话，不产计划：这一轮没有步骤，也就没有确认、执行与编辑历史。"""
+    emit = _provider(config)[1]
     body = ""
     goal = state["chat_goal"] or state["goal"]
     try:
         async for piece in answer(goal):
             body += piece
-            await state["emit"]({"type": "token", "text": piece})
+            await emit({"type": "token", "text": piece})
     except Exception:
         # 同上：纯闲聊还是得让服务层拿到真实原因，只有混合轮能把失败锁在文字段这一段
         if state["kind"] != MIXED:
@@ -363,8 +423,7 @@ def _route(state: AgentState) -> Literal["plan", "__end__"]:
     return END
 
 
-@lru_cache
-def _graph():
+def _graph(checkpointer=None):
     builder = StateGraph(AgentState)
     builder.add_node("triage", _triage)
     builder.add_node("plan", _plan)
@@ -376,34 +435,71 @@ def _graph():
     builder.add_conditional_edges("chat", _after_chat, {"plan": "plan", END: END})
     builder.add_edge("plan", "verify")
     builder.add_conditional_edges("verify", _route, {"plan": "plan", END: END})
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)
 
 
 async def run(
-    goal: str, context: GetContext, emit: Emit | None = None
+    goal: str,
+    context: GetContext,
+    emit: Emit | None = None,
+    *,
+    thread_id: uuid.UUID | str | None = None,
 ) -> tuple[str, list[dict], str]:
-    """规划一轮指令，返回（答复，尚未下发的计划，走的通道）。事件不接就不推。"""
-    state = await _graph().ainvoke(
-        {
-            "goal": goal,
-            "context": context,
-            "emit": emit or _silent,
-            "kind": EDIT,
-            "edit_goal": goal,
-            "chat_goal": "",
-            "chat_reply": "",
-            "plan": [],
-            "reply": "",
-            "retries": 0,
-        }
-    )
-    if state["kind"] == CHAT:
-        # 闲聊的话术已经组织好了，不再走步骤标签兜底
-        return state["chat_reply"], [], CHAT
-    if state["kind"] == MIXED:
-        reply = merged(state["chat_reply"], spoken(state["reply"], state["plan"]))
-        return reply, state["plan"], MIXED
-    return spoken(state["reply"], state["plan"]), state["plan"], EDIT
+    """规划一轮指令，返回（答复，尚未下发的计划，走的通道）。事件不接就不推。
+
+    指定 thread_id 时每个节点执行完都会落一份检查点；不指定则按老路径执行，
+    不碰检查点表（单元测试与临时调用常用这种方式）。
+    """
+    emitter = emit or _silent
+    tid = str(thread_id or uuid.uuid4())
+    if thread_id is None:
+        state = await _invoke(_graph(), _initial(goal), tid, context, emitter)
+    else:
+        async with checkpoint.saver() as store:
+            state = await _invoke(_graph(store), _initial(goal), tid, context, emitter)
+    return _outcome(state)
+
+
+async def resume(
+    thread_id: uuid.UUID | str,
+    context: GetContext,
+    emit: Emit | None = None,
+) -> tuple[str, list[dict], str] | None:
+    """从最后一个检查点继续这一轮；没有可恢复的快照时返回 None。
+
+    中断停在某个节点之前时会重跑那个节点；已经跑到终点的图不再重规划，
+    直接把快照里的结果交回去，供服务层补落库。
+    """
+    tid = str(thread_id)
+    emitter = emit or _silent
+    async with checkpoint.saver() as store:
+        if store is None:
+            return None
+        graph = _graph(store)
+        snapshot = await graph.aget_state(_config(tid))
+        if not snapshot.values:
+            return None
+        if snapshot.next:
+            state = await _invoke(graph, None, tid, context, emitter)
+        else:
+            state = snapshot.values
+    return _outcome(state)
+
+
+async def snapshot(thread_id: uuid.UUID | str):
+    """取这一轮最新的检查点快照，供恢复判断与联调排查。"""
+    async with checkpoint.saver() as store:
+        if store is None:
+            return None
+        return await _graph(store).aget_state(_config(str(thread_id)))
+
+
+async def history(thread_id: uuid.UUID | str) -> list:
+    """这一轮每个节点执行后的快照，最新在前，用于回溯规划过程。"""
+    async with checkpoint.saver() as store:
+        if store is None:
+            return []
+        return [item async for item in _graph(store).aget_state_history(_config(str(thread_id)))]
 
 
 def merged(chat: str, edit: str) -> str:

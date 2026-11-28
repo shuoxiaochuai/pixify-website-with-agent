@@ -30,6 +30,7 @@ agent = [
     { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-postgres" },
+    { name = "psycopg", extra = ["binary"], marker = "sys_platform == 'win32'" },
 ]
 cv = [
     { name = "onnxruntime" },
@@ -65,6 +66,7 @@ requires-dist = [
     { name = "onnxruntime", marker = "extra == 'cv'" },
     { name = "opencv-python-headless", marker = "extra == 'cv'" },
     { name = "pillow" },
+    { name = "psycopg", extras = ["binary"], marker = "sys_platform == 'win32' and extra == 'agent'" },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
     { name = "python-multipart" },
@@ -1714,6 +1716,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/db/2f/cb91e5502ec9de1de6f1b76cfbf69531932725361168bb06963620c77e2e/psycopg-3.3.4.tar.gz", hash = "sha256:e21207764952cff81b6b8bdacad9a3939f2793367fdac2987b3aac36a651b5bc", size = 165799, upload-time = "2026-05-01T23:31:55.179Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5c/e0/7b3dee031daae7743609ce3c746565d4a3ed7c2c186479eb48e34e838c64/psycopg-3.3.4-py3-none-any.whl", hash = "sha256:b6bbc25ccf05c8fad3b061d9db2ef0909a555171b84b07f29458a447253d679a", size = 213001, upload-time = "2026-05-01T23:20:50.816Z" },
+]
+
+[package.optional-dependencies]
+binary = [
+    { name = "psycopg-binary", marker = "implementation_name != 'pypy'" },
+]
+
+[[package]]
+name = "psycopg-binary"
+version = "3.3.4"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/3b/218efbc9e645becd80cdf651acda05f85cfe546b7a9c0458c7cbc8fe1f74/psycopg_binary-3.3.4-cp313-cp313-win_amd64.whl", hash = "sha256:dbfdb9b6cc79f31104a7b162a2b921b765fcc62af6c00540a167a8de47e4ed38", size = 3564592, upload-time = "2026-05-01T23:30:31.764Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/e6/5fff07a70d1f945ed90ae131c3bd76cab32beff7c58c6db15ad5820b6d1f/psycopg_binary-3.3.4-cp314-cp314-win_amd64.whl", hash = "sha256:c37e024c07308cd06cf3ec51bfd0e7f6157585a4d84d1bce4a7f5f7913719bf8", size = 3666849, upload-time = "2026-05-01T23:31:51.165Z" },
 ]
 
 [[package]]

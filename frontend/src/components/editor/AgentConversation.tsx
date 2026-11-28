@@ -38,6 +38,17 @@ export default function AgentConversation({ sessionId }: { sessionId: string }) 
       ? latest.id
       : null
   const live = useTurnStream(liveId, sessionId)
+  // 首屏就带着进行中的轮次：说明是刷新或重新进入，后端会从检查点/已落库计划续跑
+  const seeded = useRef(false)
+  const [restoring, setRestoring] = useState(false)
+  useEffect(() => {
+    if (isPending || seeded.current) return
+    seeded.current = true
+    setRestoring(turns.some((turn) => turn.status === 'running'))
+  }, [isPending, turns])
+  useEffect(() => {
+    if (restoring && !turns.some((turn) => turn.status === 'running')) setRestoring(false)
+  }, [restoring, turns])
   // 阶段与正文是一条条长出来的，轮次状态却没变，光靠 turns.length 滚不动
   const growth = liveId ? `${live.stages.length}.${live.steps.length}.${live.text.length}` : ''
 
@@ -60,6 +71,11 @@ if (turns.length === 0) {
 
   return (
     <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3">
+      {restoring && (
+        <p className="text-faint px-1 text-[10px] leading-relaxed">
+          上次还有未完成的执行，正在同步进度；刷新或重进页面不会打断它。
+        </p>
+      )}
       {turns.map((turn) => (
         <TurnBlock
           key={turn.id}

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from app import agent, events
+from app.agent import checkpoint as checkpoint_store
 from app.agent import plan as plan_mod
 from app.db import SessionFactory
 from app.layers import Layer, LayerDocument, LayerKind
@@ -92,8 +93,13 @@ async def _plan_turn(turn_id: uuid.UUID, session_id: uuid.UUID, goal: str) -> No
         raise
 
 
-async def _run_turn(turn_id: uuid.UUID, session_id: uuid.UUID, goal: str) -> None:
-    """跑一轮指令：边跑边推事件，跑完一次落库。"""
+async def _run_turn(
+    turn_id: uuid.UUID, session_id: uuid.UUID, goal: str, *, resume: bool = False
+) -> None:
+    """跑一轮指令：边跑边推事件，跑完一次落库。
+
+    resume=True 时从 LangGraph 检查点接着跑，用于服务重启后的规划恢复。
+    """
     reply, steps, kind, error = "", [], TurnKind.EDIT, None
 
     async with SessionFactory() as session:
@@ -105,12 +111,20 @@ async def _run_turn(turn_id: uuid.UUID, session_id: uuid.UUID, goal: str) -> Non
 
         try:
             # 画布摘要传的是函数：闲聊通道不会调用它，也就完全不读画布与选区
-            reply, steps, channel = await agent.run(
-                goal, lambda: describe(session, record), partial(_emit, turn_id)
+            context = partial(describe, session, record)
+            emit = partial(_emit, turn_id)
+            outcome = (
+                await agent.resume(turn_id, context, emit)
+                if resume
+                else await agent.run(goal, context, emit, thread_id=turn_id)
             )
-            kind = TurnKind(channel)
-            if steps:
-                steps = await _pin_selection(session, record, steps)
+            if outcome is None:
+                error = "服务重启，本轮规划已中断，请重新发送指令"
+            else:
+                reply, steps, channel = outcome
+                kind = TurnKind(channel)
+                if steps:
+                    steps = await _pin_selection(session, record, steps)
         except agent.PlannerUnavailable as exc:
             error = str(exc)
         except Exception:
@@ -168,6 +182,73 @@ async def _interrupt(turn_id: uuid.UUID) -> None:
         await _emit(turn_id, {"type": "failed", "error": "本轮已中断，请重试"})
     except Exception:
         logger.warning("中断轮次落库失败 turn_id=%s", turn_id, exc_info=True)
+
+
+async def recover() -> None:
+    """服务重启后接管上一个进程留下的进行中轮次。
+
+    已经出了计划的按落库步骤校准后继续推进；规划到一半的从 LangGraph
+    检查点续跑，没有检查点的老轮次直接标失败，前端不会一直停在「正在理解」。
+    """
+    try:
+        async with SessionFactory() as session:
+            turns = list(
+                await session.scalars(
+                    select(AgentRun).where(AgentRun.status == RunStatus.RUNNING)
+                )
+            )
+            pending = [(turn.id, turn.session_id, bool(turn.plan)) for turn in turns]
+    except Exception:
+        logger.warning("读取未完成轮次失败，跳过启动恢复", exc_info=True)
+        return
+
+    for turn_id, session_id, has_plan in pending:
+        if has_plan:
+            _spawn(_guard(_resume_execution(turn_id)))
+        else:
+            _spawn(_guard(_resume_planning(turn_id, session_id)))
+
+
+async def _resume_planning(turn_id: uuid.UUID, session_id: uuid.UUID) -> None:
+    """规划中断的轮次：上下文与事件按轮次重新构造，检查点里的状态接着用。"""
+    async with SessionFactory() as session:
+        turn = await session.get(AgentRun, turn_id)
+        if turn is None or turn.status.is_terminal:
+            return
+        goal = turn.goal
+        await session.commit()
+
+    await _emit(turn_id, {"type": "stage", "text": "正在恢复上次未完成的规划"})
+    await _run_turn(turn_id, session_id, goal, resume=True)
+
+
+async def _resume_execution(turn_id: uuid.UUID) -> None:
+    """执行中断的轮次：先把步骤状态与工具任务对齐，再推进没跑完的部分。"""
+    async with SessionFactory() as session:
+        turn = await session.get(AgentRun, turn_id)
+        if turn is None or turn.status.is_terminal:
+            return
+
+        steps = _copy(turn.plan)
+        for step in steps:
+            run_id = step.get("run_id")
+            if not run_id:
+                continue
+            run = await session.get(ToolRun, uuid.UUID(run_id))
+            if run is not None:
+                step["status"] = run.status.value
+        turn.plan = steps
+        _touch(turn)
+
+        # 队列里还有任务时交给 worker 重投后自然推进，别在这里重复提交
+        if any(step["status"] in {plan_mod.QUEUED, plan_mod.RUNNING} for step in steps):
+            await session.commit()
+            return
+
+        turn.status = RunStatus.RUNNING
+        await session.commit()
+        await _emit(turn_id, {"type": "stage", "text": "正在恢复上次未完成的执行"})
+        await _advance(session, turn)
 
 
 async def turn_for_user(
@@ -290,8 +371,11 @@ async def remove_turn(session: AsyncSession, record: EditSession, turn_id: uuid.
         await asyncio.gather(task, return_exceptions=True)
         await session.refresh(turn)
     await _cancel_open_runs(session, _copy(turn.plan))
+    turn_id = turn.id
     await session.delete(turn)
     await session.commit()
+    # 检查点不跟外键走，轮次删掉后主动清一遍
+    await checkpoint_store.delete(turn_id)
 
 
 async def retry(session: AsyncSession, record: EditSession, turn_id: uuid.UUID) -> AgentRun:

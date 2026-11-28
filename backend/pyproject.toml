@@ -30,6 +30,8 @@ cv = [
 agent = [
     "langgraph",
     "langgraph-checkpoint-postgres",
+    # Windows 本地没有系统 libpq，检查点驱动要自带二进制；Linux 服务器走系统 libpq
+    "psycopg[binary]; sys_platform == 'win32'",
     "langchain-core",
     "langchain-openai",
 ]

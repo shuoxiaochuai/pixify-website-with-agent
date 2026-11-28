@@ -6,9 +6,11 @@ from fastapi import APIRouter, FastAPI
 from fastapi.responses import FileResponse
 
 from app import storage
+from app.agent import checkpoint as checkpoint_store
 from app.config import get_settings
 from app.queue import close_queue
 from app.routers import assets, auth, batches, events, health, lesion, runs, sessions
+from app.services import agent as agent_service
 
 settings = get_settings()
 
@@ -16,6 +18,9 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await asyncio.to_thread(storage.ensure_bucket)
+    # 检查点表与上次中断的轮次都在启动时处理，规划恢复在后台跑，不堵端口
+    await checkpoint_store.ensure_ready()
+    await agent_service.recover()
     yield
     await close_queue()
 

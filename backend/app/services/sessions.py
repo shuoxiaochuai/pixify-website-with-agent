@@ -5,7 +5,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.layers import BASE_LAYER_ID, LayerDocument, document_of
-from app.models import Asset, EditHistory, EditSession, SessionAsset
+from app.models import AgentRun, Asset, EditHistory, EditSession, SessionAsset
 from app.models.edit_history import HISTORY_LIMIT
 
 TITLE_LIMIT = 80
@@ -303,9 +303,19 @@ async def remove(session: AsyncSession, record: EditSession) -> None:
 
     图片墙关联、对话轮次、编辑记录与工具任务都由数据库外键级联带走；
     素材本身属于用户而不是会话，删会话不会把图从素材库里抹掉。
+    轮次的 LangGraph 检查点不跟外键走，这里按 id 一并清掉。
     """
+    turn_ids = list(
+        await session.scalars(select(AgentRun.id).where(AgentRun.session_id == record.id))
+    )
     await session.delete(record)
     await session.commit()
+
+    # 延迟导入：agent 包会反向依赖 services，顶层导入会绕成环
+    from app.agent import checkpoint as checkpoint_store
+
+    for turn_id in turn_ids:
+        await checkpoint_store.delete(turn_id)
 
 
 async def detach_asset(session: AsyncSession, record: EditSession, asset: Asset) -> None:
