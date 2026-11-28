@@ -1,9 +1,11 @@
 import asyncio
+import uuid
 from typing import Literal
 
 from pydantic import Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import storage
 from app.config import get_settings
 from app.layers import Layer, LayerKind
 from app.lesion import engine
@@ -26,9 +28,17 @@ class SegmentLesionIn(LayerRef):
     )
     threshold: float | None = Field(
         default=None,
-        ge=0.05,
+        ge=0,
         le=0.99,
-        description="概率阈值，越高越严格；不填用服务端默认值",
+        description="概率阈值，0 最宽松、0.99 最严格；不填用服务端默认值",
+    )
+    auto_threshold: bool = Field(
+        default=False,
+        description="按上传的真实标注逐档比对，自动取平均 Dice 最高的阈值（仅验证集）",
+    )
+    gt_assets: dict[Literal["EX", "HE", "MA", "SE"], uuid.UUID] = Field(
+        default_factory=dict,
+        description="每类真实标注的素材 id；自动阈值时勾选的每一类都要有",
     )
 
 
@@ -41,16 +51,43 @@ async def segment_lesion_exec(session: AsyncSession, run: ToolRun) -> dict:
     document = document_of(record).model_copy(deep=True)
     layer = resolve_target(document, run.params.get("layer_id"))
     wanted = list(dict.fromkeys(run.params.get("types") or list(engine.TYPES)))
-    threshold = float(run.params.get("threshold") or get_settings().lesion_threshold)
+    raw = run.params.get("threshold")
+    threshold = float(raw) if raw is not None else get_settings().lesion_threshold
+    auto = bool(run.params.get("auto_threshold"))
+    references = run.params.get("gt_assets") or {}
+
+    if auto:
+        missing = [name for name in wanted if name not in references]
+        if missing:
+            raise ToolError(f"自动阈值需要为每一类上传真实标注（缺少 {'、'.join(missing)}）")
 
     await runs.report(session, run, 10, "读取图层")
     data = await layer_image(session, record, layer)
 
-    await runs.report(session, run, 30, "病灶推理中")
-    try:
-        masks = await asyncio.to_thread(engine.predict, data, wanted, threshold)
-    except engine.Unavailable as exc:
-        raise ToolError(str(exc)) from exc
+    dice_scores: dict[str, float] = {}
+    if auto:
+        await runs.report(session, run, 30, "推理并遍历阈值")
+        truth: dict[str, bytes] = {}
+        for name in wanted:
+            asset = await assets.get_for_user(
+                session, record.user_id, uuid.UUID(str(references[name]))
+            )
+            if asset is None:
+                raise ToolError(f"真实标注素材不存在（{name}）")
+            truth[name] = await storage.get(asset.storage_key)
+        try:
+            calibrated = await asyncio.to_thread(engine.calibrate, data, wanted, truth)
+        except engine.Unavailable as exc:
+            raise ToolError(str(exc)) from exc
+        threshold = calibrated.threshold
+        masks = calibrated.masks
+        dice_scores = calibrated.dice
+    else:
+        await runs.report(session, run, 30, "病灶推理中")
+        try:
+            masks = await asyncio.to_thread(engine.predict, data, wanted, threshold)
+        except engine.Unavailable as exc:
+            raise ToolError(str(exc)) from exc
 
     await runs.report(session, run, 80, "生成标注图层")
     stale = {f"{SOURCE}{name}" for name in wanted}
@@ -83,10 +120,19 @@ async def segment_lesion_exec(session: AsyncSession, run: ToolRun) -> dict:
         created.append(str(asset.id))
 
     if not created:
-        raise ToolError("未检出所选类型的病灶，可换更低的阈值再试")
+        raise ToolError(
+            "按标注选出的阈值下未检出病灶，请确认标注与勾选的类型一致"
+            if auto
+            else "未检出所选类型的病灶，可换更低的阈值再试"
+        )
 
     await runs.report(session, run, 95, "写回画布")
-    return {"document": document.model_dump(mode="json"), "asset_ids": created}
+    return {
+        "document": document.model_dump(mode="json"),
+        "asset_ids": created,
+        "threshold": round(threshold, 4),
+        "dice": dice_scores or None,
+    }
 
 
 SEGMENT_LESION = ToolSpec(
@@ -101,4 +147,6 @@ SEGMENT_LESION = ToolSpec(
     handler=segment_lesion_exec,
     queued=True,
     session_required=True,
+    # 真实标注来自界面上的验证集上传，模型不该也拿不到素材 id
+    agent_hidden=("auto_threshold", "gt_assets"),
 )

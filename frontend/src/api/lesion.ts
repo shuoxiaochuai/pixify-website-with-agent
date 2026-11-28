@@ -1,4 +1,5 @@
-import { api } from '@/api/client'
+import type { Asset } from '@/api/assets'
+import { api, apiError } from '@/api/client'
 
 export type LesionType = 'EX' | 'HE' | 'MA' | 'SE'
 
@@ -29,4 +30,12 @@ export type LesionStatus = {
 
 export const lesionApi = {
   status: () => api.get<LesionStatus>('/lesion/status'),
+  /** 真实标注（IDRiD 的 .tif 也能传），后端统一转灰度 PNG 存成 mask 素材 */
+  async uploadMask(file: File): Promise<Asset> {
+    const body = new FormData()
+    body.append('file', file)
+    const response = await fetch('/api/lesion/masks', { method: 'POST', body })
+    if (!response.ok) throw await apiError(response, '标注上传失败')
+    return response.json()
+  },
 }

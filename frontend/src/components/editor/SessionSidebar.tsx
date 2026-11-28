@@ -5,10 +5,11 @@ import AgentConversation from '@/components/editor/AgentConversation'
 import MessageComposer from '@/components/editor/MessageComposer'
 import Button from '@/components/ui/Button'
 import { buttonClass } from '@/components/ui/buttonStyles'
+import PencilIcon from '@/components/ui/PencilIcon'
 import TrashIcon from '@/components/ui/TrashIcon'
 import { useSendMessage, useTurns } from '@/hooks/useAgent'
 import { errorMessage } from '@/hooks/useAuth'
-import { useDeleteSession, useSessions } from '@/hooks/useSessions'
+import { useDeleteSession, useRenameSession, useSessions } from '@/hooks/useSessions'
 import { formatDateTime } from '@/lib/format'
 
 export default function SessionSidebar({ activeId }: { activeId: string }) {
@@ -72,8 +73,11 @@ function SessionList({ activeId }: { activeId: string }) {
   const { data: sessions = [], isPending } = useSessions()
   const navigate = useNavigate()
   const remove = useDeleteSession()
+  const rename = useRenameSession()
   // 一次只让一条处在待确认状态，确认条直接顶掉这一行，不弹窗
   const [pendingId, setPendingId] = useState<string | null>(null)
+  // 未命名的会话打开时留空输入框，直接键入名字即可
+  const [editing, setEditing] = useState<{ id: string; draft: string } | null>(null)
 
   if (isPending) {
     return <p className="text-faint border-line border-b px-4 py-3 text-xs">加载中…</p>
@@ -93,11 +97,50 @@ function SessionList({ activeId }: { activeId: string }) {
     })
   }
 
+  const saveRename = () => {
+    if (!editing) return
+    const title = editing.draft.trim()
+    if (!title) return
+    rename.mutate({ id: editing.id, title }, { onSuccess: () => setEditing(null) })
+  }
+
   return (
     <ul className="border-line scrollbar-slim animate-fade-in max-h-52 shrink-0 space-y-0.5 overflow-y-auto border-b p-2">
       {sessions.map((session) => (
         <li key={session.id} className="group relative">
-          {session.id === pendingId ? (
+          {editing && editing.id === session.id ? (
+            <div className="border-line bg-soft animate-fade-in rounded-chip flex flex-col gap-1.5 border px-2.5 py-2">
+              <input
+                autoFocus
+                value={editing.draft}
+                maxLength={80}
+                placeholder="给这条对话起个名字"
+                aria-label="对话标题"
+                className="border-line text-ink placeholder:text-faint rounded-control focus:border-line-strong w-full border px-2 py-1 text-xs outline-none"
+                onChange={(event) => {
+                  const draft = event.target.value
+                  setEditing((current) => (current ? { ...current, draft } : current))
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') saveRename()
+                  if (event.key === 'Escape') setEditing(null)
+                }}
+              />
+              <div className="flex justify-end gap-1">
+                <Button size="sm" disabled={rename.isPending} onClick={() => setEditing(null)}>
+                  取消
+                </Button>
+                <Button
+                  size="sm"
+                  variant="solid"
+                  disabled={rename.isPending || !editing.draft.trim()}
+                  onClick={saveRename}
+                >
+                  {rename.isPending ? '保存中' : '保存'}
+                </Button>
+              </div>
+            </div>
+          ) : session.id === pendingId ? (
             <div className="border-line bg-soft animate-fade-in flex flex-col gap-1.5 rounded-chip border px-2.5 py-2">
               <p className="text-muted text-[11px] leading-snug">
                 删除「{session.title}」？对话与编辑记录会一起清掉，删了找不回来（图仍留在素材库）。
@@ -120,7 +163,7 @@ function SessionList({ activeId }: { activeId: string }) {
             <>
               <NavLink
                 to={`/editor/${session.id}`}
-                className={`rounded-chip block px-2.5 pr-8 py-2 transition-colors duration-150 ${
+                className={`rounded-chip block px-2.5 pr-14 py-2 transition-colors duration-150 ${
                   session.id === activeId
                     ? 'bg-brand-soft text-brand-strong'
                     : 'text-muted hover:bg-soft hover:text-ink'
@@ -131,12 +174,29 @@ function SessionList({ activeId }: { activeId: string }) {
                   {formatDateTime(session.updated_at)}
                 </span>
               </NavLink>
-              <span className="absolute top-1/2 right-1 -translate-y-1/2">
+              <span className="absolute top-1/2 right-1 flex -translate-y-1/2 items-center gap-0.5">
+                <Button
+                  size="sm"
+                  variant="icon"
+                  title="重命名这条对话"
+                  onClick={() => {
+                    setPendingId(null)
+                    setEditing({
+                      id: session.id,
+                      draft: session.title === '未命名会话' ? '' : session.title,
+                    })
+                  }}
+                >
+                  <PencilIcon />
+                </Button>
                 <Button
                   size="sm"
                   variant="icon"
                   title="删除这条对话"
-                  onClick={() => setPendingId(session.id)}
+                  onClick={() => {
+                    setEditing(null)
+                    setPendingId(session.id)
+                  }}
                 >
                   <TrashIcon />
                 </Button>

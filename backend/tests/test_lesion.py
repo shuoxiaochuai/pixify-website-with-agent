@@ -1,12 +1,13 @@
 import uuid
+from io import BytesIO
 from pathlib import Path
 
 import httpx
 import numpy as np
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
-from app.lesion import engine
+from app.lesion import engine, masks
 from app.tasks.tools import run_tool
 from tests.canvas import error_of, invoke, scene
 from tests.test_sessions import make_image, open_session
@@ -211,3 +212,129 @@ async def test_unknown_type_is_rejected_before_queueing(signed_in: httpx.AsyncCl
     )
 
     assert response.status_code == 422
+
+
+def test_align_mask_follows_the_inference_crop_chain():
+    image = Image.new("L", (800, 1200), 0)
+    ImageDraw.Draw(image).rectangle((300, 600, 400, 700), fill=255)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+
+    aligned = masks.align(buffer.getvalue(), (800, 1200))
+
+    assert aligned.shape == (engine.SIZE, engine.SIZE)
+    assert not aligned[:300].any()
+    assert aligned[330:390, 310:330].any()
+
+
+def test_dice_rewards_overlap_and_penalizes_empty_predictions():
+    truth = _mask((10, 10), (0, 5, 0, 5))
+
+    assert masks.dice(truth, truth) == pytest.approx(1.0)
+    assert masks.dice(_mask((10, 10), (5, 10, 5, 10)), truth) == pytest.approx(0.0)
+    assert masks.dice(np.zeros((10, 10), dtype=bool), truth) == pytest.approx(0.0)
+
+
+async def test_mask_upload_accepts_tiff_and_stores_grayscale_png(
+    signed_in: httpx.AsyncClient,
+):
+    buffer = BytesIO()
+    Image.new("L", (320, 240), 255).save(buffer, format="TIFF")
+
+    response = await signed_in.post(
+        "/api/lesion/masks",
+        files={"file": ("gt.tif", buffer.getvalue(), "image/tiff")},
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["kind"] == "mask"
+    assert body["image_format"] == "PNG"
+
+
+async def test_auto_threshold_reports_the_best_value(signed_in: httpx.AsyncClient, monkeypatch):
+    captured: dict = {}
+
+    def fake_calibrate(data, types, truth):
+        captured["types"] = list(types)
+        captured["truth"] = sorted(truth)
+        return engine.Calibration(
+            threshold=0.55,
+            masks={name: _mask((240, 320), (80, 140, 100, 220)) for name in types},
+            dice={name: 0.88 for name in truth},
+        )
+
+    monkeypatch.setattr(engine, "available", lambda: (True, None))
+    monkeypatch.setattr(engine, "calibrate", fake_calibrate)
+    session = await open_session(signed_in, image=make_image((320, 240)))
+    mask = (
+        await signed_in.post(
+            "/api/lesion/masks",
+            files={"file": ("gt.png", _png((320, 240), (0, 0, 0)), "image/png")},
+        )
+    ).json()
+
+    body = await invoke(
+        signed_in,
+        session["id"],
+        "segment_lesion",
+        {"types": ["EX"], "auto_threshold": True, "gt_assets": {"EX": mask["id"]}},
+    )
+    await run_tool({}, uuid.UUID(body["run"]["id"]))
+
+    run = (await signed_in.get(f"/api/runs/{body['run']['id']}")).json()
+    assert run["result"]["threshold"] == 0.55
+    assert run["result"]["dice"] == {"EX": 0.88}
+    assert captured == {"types": ["EX"], "truth": ["EX"]}
+    updated = (await signed_in.get(f"/api/sessions/{session['id']}")).json()
+    assert any(layer["id"] == "lesion-ex" for layer in updated["document"]["layers"])
+
+
+async def test_auto_threshold_requires_annotations(signed_in: httpx.AsyncClient, monkeypatch):
+    monkeypatch.setattr(engine, "available", lambda: (True, None))
+    session = await open_session(signed_in)
+
+    body = await invoke(
+        signed_in,
+        session["id"],
+        "segment_lesion",
+        {"types": ["EX", "MA"], "auto_threshold": True},
+    )
+    await run_tool({}, uuid.UUID(body["run"]["id"]))
+
+    error = await error_of(signed_in, body["run"]["id"])
+    assert "真实标注" in error
+    assert "MA" in error
+
+
+async def test_zero_threshold_is_forwarded(signed_in: httpx.AsyncClient, monkeypatch):
+    calls: list[float] = []
+    monkeypatch.setattr(engine, "available", lambda: (True, None))
+    monkeypatch.setattr(
+        engine,
+        "predict",
+        lambda data, types, threshold: (
+            calls.append(threshold) or {name: _mask((240, 320), (10, 20, 10, 20)) for name in types}
+        ),
+    )
+    session = await open_session(signed_in, image=make_image((320, 240)))
+
+    body = await invoke(
+        signed_in, session["id"], "segment_lesion", {"types": ["EX"], "threshold": 0}
+    )
+    await run_tool({}, uuid.UUID(body["run"]["id"]))
+
+    assert calls == [0.0]
+
+
+async def test_threshold_outside_the_supported_range_is_rejected(
+    signed_in: httpx.AsyncClient,
+):
+    session = await open_session(signed_in)
+
+    for value in (-0.1, 1):
+        response = await signed_in.post(
+            f"/api/sessions/{session['id']}/tools",
+            json={"tool": "segment_lesion", "params": {"types": ["EX"], "threshold": value}},
+        )
+        assert response.status_code == 422

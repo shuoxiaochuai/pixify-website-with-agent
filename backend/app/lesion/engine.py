@@ -11,12 +11,14 @@ float32、范围 0~255（训练脚本对 uint8 张量直接 .float()，没有除
 import io
 import threading
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
 from app.config import get_settings
+from app.lesion.masks import PAD, SIZE, align, dice
 
 TYPES: tuple[str, ...] = ("EX", "HE", "MA", "SE")
 LABELS: dict[str, str] = {
@@ -33,10 +35,10 @@ COLORS: dict[str, tuple[int, int, int]] = {
     "SE": (67, 210, 92),
 }
 
-SIZE = 640  # CAUNet.original_size，forward 里的插值尺寸写死了 640
-PAD = 642  # 验证集 Resize(642) → CenterCrop(640)
 CLAHE_CLIP = 4.0  # albumentations CLAHE 的默认值
 CLAHE_TILE = (8, 8)
+# 自动阈值只在验证集用：逐档比对真实标注，取平均 Dice 最高的一档
+CANDIDATES: tuple[float, ...] = tuple(round(0.05 * step, 2) for step in range(1, 20))
 
 NO_GPU = "当前实例未开启 GPU，病灶分割需要显卡算力；开启后重试"
 NO_RUNTIME = "当前实例未安装推理运行时（torch），病灶分割暂不可用"
@@ -168,26 +170,67 @@ def _model(name: str, torch, device: str):
     return model
 
 
-def predict(data: bytes, types: Sequence[str], threshold: float) -> dict[str, np.ndarray]:
-    """逐类推理并返回原图尺寸的二值掩码。显存有限，四类串行。"""
+@dataclass(frozen=True)
+class Calibration:
+    """自动阈值的结果：全局阈值、二值掩码与各类 Dice。"""
+
+    threshold: float
+    masks: dict[str, np.ndarray]
+    dice: dict[str, float]
+
+
+def _runtime():
     torch = _import_torch()
     device = device_label()
     if device == "cuda" and not torch.cuda.is_available():
         raise Unavailable(NO_GPU)
+    return torch, device
 
-    sample, size = prepare(data)
-    masks: dict[str, np.ndarray] = {}
+
+def _forward(torch, device: str, sample: np.ndarray, types: Sequence[str]) -> dict[str, np.ndarray]:
+    """跑一遍模型，返回 640×640 的概率图。显存有限，仍逐类串行。"""
+    probs: dict[str, np.ndarray] = {}
     with _lock:
         with torch.inference_mode():
             batch = torch.from_numpy(sample)[None, None].to(device)
             for name in types:
                 output = _model(name, torch, device)(batch)
                 prob = output[0] if isinstance(output, tuple) else output
-                prob = prob[0, 0].detach().to("cpu").float().numpy()
-                masks[name] = restore(prob >= threshold, size)
+                probs[name] = prob[0, 0].detach().to("cpu").float().numpy()
         if device == "cuda":
             torch.cuda.empty_cache()
-    return masks
+    return probs
+
+
+def predict(data: bytes, types: Sequence[str], threshold: float) -> dict[str, np.ndarray]:
+    """逐类推理并返回原图尺寸的二值掩码。显存有限，四类串行。"""
+    torch, device = _runtime()
+    sample, size = prepare(data)
+    probs = _forward(torch, device, sample, types)
+    return {name: restore(probs[name] >= threshold, size) for name in types}
+
+
+def calibrate(data: bytes, types: Sequence[str], truth: dict[str, bytes]) -> Calibration:
+    """用真实标注逐档比对概率图，取平均 Dice 最高的阈值再出二值掩码。"""
+    torch, device = _runtime()
+    sample, size = prepare(data)
+    probs = _forward(torch, device, sample, types)
+    truths = {name: align(truth[name], size) for name in types if name in truth}
+    if not truths:
+        raise Unavailable("自动阈值需要至少一份真实标注")
+
+    best = CANDIDATES[0]
+    best_score = -1.0
+    for value in CANDIDATES:
+        score = sum(dice(probs[name] >= value, mask) for name, mask in truths.items()) / len(truths)
+        if score > best_score:
+            best, best_score = value, score
+
+    return Calibration(
+        threshold=best,
+        masks={name: restore(probs[name] >= best, size) for name in types},
+        dice={name: round(dice(probs[name] >= best, mask), 4) for name, mask in truths.items()},
+    )
 
 
 def overlay(mask: np.ndarray, color: tuple[int, int, int]) -> bytes:

@@ -66,6 +66,26 @@ export function usePatchSession(id: string) {
 }
 
 /**
+ * 历史列表里的重命名。只改标题，所以不必重取历史记录与文档，
+ * 详情缓存就地换标题，列表整体重取一次。
+ */
+export function useRenameSession() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, title }: { id: string; title: string }) =>
+      sessionsApi.patch(id, { title }),
+    onSuccess: (detail) => {
+      queryClient.setQueryData<SessionDetail>(detailKey(detail.id), (current) =>
+        current ? { ...current, title: detail.title } : detail,
+      )
+      void queryClient.invalidateQueries({ queryKey: LIST_KEY })
+      toast('已重命名', 'ok')
+    },
+    onError: (error) => toast(errorMessage(error), 'danger'),
+  })
+}
+
+/**
  * 删掉整条会话。后端是硬删除，没有撤销入口，所以调用方要先拿到确认。
  */
 export function useDeleteSession() {
@@ -110,15 +130,18 @@ export function useExportPack(id: string) {
 export function useSessionTools(id: string) {
   const queryClient = useQueryClient()
   const cache = useCacheSession(id)
-  const [pendingRunId, setPendingRunId] = useState<string | null>(null)
-  const live = useRun(pendingRunId)
+  // 记下自己发起的任务（run id + 工具），完成后供界面回填结果
+  const [watched, setWatched] = useState<{ id: string; tool: string } | null>(null)
+  const live = useRun(watched?.id ?? null)
 
   const invoke = useMutation({
     mutationFn: ({ tool, params }: { tool: string; params?: Record<string, unknown> }) =>
       sessionsApi.invoke(id, tool, params),
     onSuccess: (body) => {
       cache(body.session)
-      if (!isTerminal(body.run.status)) setPendingRunId(body.run.id)
+      if (!isTerminal(body.run.status)) {
+        setWatched({ id: body.run.id, tool: body.run.tool })
+      }
     },
     onError: (error) => toast(errorMessage(error), 'danger'),
   })
@@ -141,20 +164,21 @@ export function useSessionTools(id: string) {
     onSettled: unlockHistory,
   })
 
-  const waiting = Boolean(pendingRunId && (!live.status || !isTerminal(live.status)))
+  const waiting = Boolean(watched && (!live.status || !isTerminal(live.status)))
   const busy = invoke.isPending || undo.isPending || redo.isPending || waiting
 
   // 提示里的撤销要在完成那一刻才可用，用 ref 拿最新的 mutation，避免把它塞进 effect 依赖
   const undoRef = useRef(() => undo.mutate())
   undoRef.current = () => undo.mutate()
-  const pendingTool = invoke.variables?.tool
+  const pendingTool = watched?.tool
   // 一个任务只播报一次，后续依赖变化不会再弹提示
   const announced = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!pendingRunId || !live.status || !isTerminal(live.status)) return
-    if (announced.current === pendingRunId) return
-    announced.current = pendingRunId
+    if (!watched || !live.status || !isTerminal(live.status)) return
+    const runId = watched.id
+    if (announced.current === runId) return
+    announced.current = runId
     void queryClient.invalidateQueries({ queryKey: detailKey(id) })
     void queryClient.invalidateQueries({ queryKey: historyKey(id) })
     if (live.status === 'failed') {
@@ -169,7 +193,7 @@ export function useSessionTools(id: string) {
         ? { action: { label: '撤销', run: () => undoRef.current() } }
         : undefined,
     )
-  }, [pendingRunId, live.status, live.error, live.stage, pendingTool, id, queryClient])
+  }, [watched, live.status, live.error, live.stage, pendingTool, id, queryClient])
 
   /**
    * 当前在跑的是不是这一次调用。工具层同时只跑一个任务，界面据此只给发起的那个按钮
@@ -187,12 +211,19 @@ export function useSessionTools(id: string) {
     action()
   }
 
+  // 最近一次排队任务的最终状态与结果，病灶面板据此回填自动算出的阈值
+  const lastRun =
+    watched && live.status
+      ? { id: watched.id, tool: watched.tool, status: live.status, result: live.result }
+      : null
+
   return {
     invoke: (tool: string, params?: Record<string, unknown>) => invoke.mutate({ tool, params }),
     undo: () => runHistory(() => undo.mutate()),
     redo: () => runHistory(() => redo.mutate()),
     busy,
     isRunning,
+    lastRun,
     pending: waiting,
     pendingStage: waiting ? live.stage : '',
     pendingProgress: waiting ? live.progress : 0,

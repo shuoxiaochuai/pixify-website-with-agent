@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import type { Asset } from '@/api/assets'
 import { ACTION_LABELS, type Layer, type SessionDetail } from '@/api/sessions'
 import { BackgroundForm, ExpandForm, ReplaceForm } from '@/components/editor/GenerateEdits'
-import LesionPanel from '@/components/editor/LesionPanel'
+import LesionPanel, { type LesionRunResult } from '@/components/editor/LesionPanel'
 import Button from '@/components/ui/Button'
 import { useSessionHistory, type SessionTools } from '@/hooks/useSessions'
 import { formatBytes, formatDateTime } from '@/lib/format'
@@ -52,6 +52,17 @@ export default function LayerPanel({
     session.document.layers.find((layer) => layer.id === selectedLayerId) ??
     session.document.layers.at(-1)
   const onlyToWall = wallOnly(session.document)
+  const lastRun = tools.lastRun
+  // 自动阈值跑完要把后端算出的最优值回填到面板，用 run id 区分多次运行
+  const lesionResult: LesionRunResult | null =
+    lastRun?.tool === 'segment_lesion'
+      ? {
+          runId: lastRun.id,
+          threshold:
+            typeof lastRun.result.threshold === 'number' ? lastRun.result.threshold : undefined,
+          dice: (lastRun.result.dice as Record<string, number> | null | undefined) ?? null,
+        }
+      : null
 
   return (
     <aside className="border-line bg-paper scrollbar-slim h-full w-72 shrink-0 overflow-y-auto border-l">
@@ -94,8 +105,15 @@ export default function LayerPanel({
         <LesionPanel
           disabled={tools.busy}
           progress={tools.isRunning('segment_lesion') ? tools.pendingProgress : null}
-          onApply={({ types, threshold }) =>
-            tools.invoke('segment_lesion', { types, threshold, layer_id: selectedLayerId })
+          result={lesionResult}
+          onApply={({ types, threshold, auto_threshold, gt_assets }) =>
+            tools.invoke('segment_lesion', {
+              types,
+              threshold,
+              auto_threshold,
+              gt_assets,
+              layer_id: selectedLayerId,
+            })
           }
         />
       )}
