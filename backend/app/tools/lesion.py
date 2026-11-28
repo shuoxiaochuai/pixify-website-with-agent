@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import storage
 from app.config import get_settings
-from app.layers import Layer, LayerKind
+from app.layers import Layer, LayerDocument, LayerKind
 from app.lesion import engine
 from app.models.asset import AssetKind, AssetSource
 from app.models.tool_run import ToolRun
@@ -19,6 +19,20 @@ from app.tools.target import layer_image, resolve_target
 OPACITY = 0.55
 # 图层来源标记。重跑同一类型时先摘掉旧标注，避免半透明红层叠成一片死红。
 SOURCE = "lesion:"
+
+
+def _target(document: LayerDocument, layer_id: str | None) -> Layer:
+    """未点名图层时分割照片本身：跳过上一次生成的标注层，不然重跑会把标注当输入。"""
+    if layer_id:
+        return resolve_target(document, layer_id)
+    for layer in document.layers:
+        if (
+            layer.kind is LayerKind.IMAGE
+            and layer.visible
+            and not (layer.source_hash or "").startswith(SOURCE)
+        ):
+            return layer
+    return resolve_target(document, None)
 
 
 class SegmentLesionIn(LayerRef):
@@ -49,7 +63,7 @@ async def segment_lesion_exec(session: AsyncSession, run: ToolRun) -> dict:
 
     record = await require_session(session, run)
     document = document_of(record).model_copy(deep=True)
-    layer = resolve_target(document, run.params.get("layer_id"))
+    layer = _target(document, run.params.get("layer_id"))
     wanted = list(dict.fromkeys(run.params.get("types") or list(engine.TYPES)))
     raw = run.params.get("threshold")
     threshold = float(raw) if raw is not None else get_settings().lesion_threshold

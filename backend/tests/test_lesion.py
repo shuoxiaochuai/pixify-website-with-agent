@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw
 
 from app.lesion import engine, masks
 from app.tasks.tools import run_tool
+from app.tools import lesion as lesion_tool
 from tests.canvas import error_of, invoke, scene
 from tests.test_sessions import make_image, open_session
 
@@ -182,6 +183,32 @@ async def test_rerunning_replaces_instead_of_stacking(signed_in: httpx.AsyncClie
     ]
 
     assert [layer["id"] for layer in overlays] == ["lesion-ex"]
+
+
+async def test_default_target_skips_previous_annotations(signed_in: httpx.AsyncClient, monkeypatch):
+    """重跑默认图层仍应是照片：标注层在最上面，不能拿它当输入。"""
+    targets: list[str] = []
+
+    async def fake_layer_image(session, record, layer):
+        targets.append(layer.id)
+        return _png((320, 240), (10, 20, 30))
+
+    monkeypatch.setattr(engine, "available", lambda: (True, None))
+    monkeypatch.setattr(
+        engine,
+        "predict",
+        lambda data, types, threshold: {
+            name: _mask((240, 320), (10, 20, 10, 20)) for name in types
+        },
+    )
+    monkeypatch.setattr(lesion_tool, "layer_image", fake_layer_image)
+    session = await open_session(signed_in, image=make_image((320, 240)))
+
+    for _ in range(2):
+        body = await invoke(signed_in, session["id"], "segment_lesion", {"types": ["EX"]})
+        await run_tool({}, uuid.UUID(body["run"]["id"]))
+
+    assert targets == ["base", "base"]
 
 
 async def test_empty_result_reports_instead_of_adding_blank_layers(
