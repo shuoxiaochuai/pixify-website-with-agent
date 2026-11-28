@@ -1,8 +1,8 @@
 const STEPS = [
-  { title: '描述需求', desc: '一句话说清商品、场景与尺寸。' },
+  { title: '描述需求', desc: '一句话说清主体、场景与尺寸。' },
   { title: '挑选方向', desc: '从 4 个候选里选中最合适的一张。' },
   { title: '局部精修', desc: '点选主体下指令，反复改到满意。' },
-  { title: '导出物料', desc: '按投放渠道一次导出全部尺寸。' },
+  { title: '导出成品', desc: '按需一次导出全部尺寸。' },
 ]
 
 export default function DeliverySteps() {

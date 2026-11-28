@@ -24,7 +24,7 @@ def _zip_of(response: httpx.Response) -> zipfile.ZipFile:
 
 
 async def test_export_without_materials_includes_current_canvas(signed_in: httpx.AsyncClient):
-    session = await open_session(signed_in, title="白底主图")
+    session = await open_session(signed_in, title="白底图")
 
     response = await signed_in.post(f"/api/sessions/{session['id']}/exports", json={})
     archive = _zip_of(response)
@@ -33,8 +33,8 @@ async def test_export_without_materials_includes_current_canvas(signed_in: httpx
 
     disposition = unquote(response.headers["content-disposition"])
     assert "filename*=UTF-8''" in response.headers["content-disposition"]
-    assert "白底主图" in disposition
-    assert manifest["title"] == "白底主图"
+    assert "白底图" in disposition
+    assert manifest["title"] == "白底图"
     assert len(manifest["items"]) == 1
     assert manifest["items"][0]["kind"] == "canvas"
     assert manifest["items"][0]["file"] in names

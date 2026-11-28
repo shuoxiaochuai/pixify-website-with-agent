@@ -35,7 +35,7 @@ class PackedExport:
 
 def _safe_name(title: str) -> str:
     cleaned = re.sub(r"[^\w\u4e00-\u9fff\- ]+", "", title).strip()
-    return (cleaned.replace(" ", "-") or "物料")[:40]
+    return (cleaned.replace(" ", "-") or "图片")[:40]
 
 
 def _extension(asset: Asset | None) -> str:

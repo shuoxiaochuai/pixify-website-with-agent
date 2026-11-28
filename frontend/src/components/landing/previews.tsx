@@ -56,8 +56,8 @@ export function SelectionPreview() {
 }
 
 const LAYERS = [
-  { name: '文字 · 卖点标注', tone: 'bg-accent/70', indent: 'ml-0' },
-  { name: '主体 · 商品', tone: 'bg-brand/60', indent: 'ml-3' },
+  { name: '文字 · 标题', tone: 'bg-accent/70', indent: 'ml-0' },
+  { name: '主体 · 物体', tone: 'bg-brand/60', indent: 'ml-3' },
   { name: '背景 · 场景', tone: 'bg-line-strong', indent: 'ml-6' },
 ]
 
@@ -88,7 +88,7 @@ const RATIOS = [
   { label: '9:16', frame: 'h-[78px] w-[44px]' },
 ]
 
-/** 物料包交付：一次导出多个投放尺寸。 */
+/** 多尺寸交付：一次导出多个尺寸。 */
 export function ExportsPreview() {
   return (
     <div className="flex items-end gap-3" aria-hidden>

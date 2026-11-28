@@ -59,7 +59,7 @@ export default function PromptComposer({
           }
         }}
         placeholder={placeholder}
-        aria-label="描述你想要的商品物料"
+        aria-label="描述你想要的画面"
         className="text-ink placeholder:text-faint w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[15px] leading-relaxed outline-none"
       />
 
@@ -70,7 +70,7 @@ export default function PromptComposer({
           className="text-muted hover:border-line-strong hover:text-ink border-line rounded-control flex items-center gap-1.5 border px-2.5 py-1.5 text-xs font-medium transition-colors"
         >
           <AttachIcon />
-          上传商品图
+          上传图片
         </button>
 
         <div className="flex items-center gap-3">

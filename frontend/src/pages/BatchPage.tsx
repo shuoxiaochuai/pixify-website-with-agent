@@ -60,7 +60,7 @@ function Compose() {
     <div className="mx-auto max-w-5xl px-8 py-10">
       <h1 className="text-ink text-2xl font-semibold tracking-tight">批量</h1>
       <p className="text-muted mt-1 mb-8 text-sm">
-        对多张图走同一套像素处理：去背景、换背景、调色、超分、扩图、投放尺寸。
+        对多张图走同一套像素处理：去背景、换背景、调色、超分、扩图、尺寸适配。
       </p>
 
       <section className="mb-8">

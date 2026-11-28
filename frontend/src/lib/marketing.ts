@@ -8,10 +8,10 @@ export const MARKETING_KINDS: {
   label: string
   hint: string
 }[] = [
-  { id: 'product', label: '商品主图', hint: '白底居中，适合详情页主图' },
+  { id: 'product', label: '纯净背景', hint: '白底居中，边缘干净' },
   { id: 'scene', label: '场景氛围图', hint: '真实场景，侧逆光浅景深' },
-  { id: 'model', label: '模特上身', hint: '模特手持或佩戴展示' },
-  { id: 'poster', label: '促销海报', hint: '突出商品，预留文案区' },
+  { id: 'model', label: '人物出镜', hint: '人物与主体自然互动' },
+  { id: 'poster', label: '文字海报', hint: '突出主体，预留文案区' },
 ]
 
 export const DELIVERY_RATIOS: { value: Ratio; label: string; size: string }[] = [
@@ -32,7 +32,7 @@ export const KIND_LABELS: Record<AssetKind, string> = {
   subject: '主体',
   background: '背景',
   mask: '遮罩',
-  marketing: '营销',
+  marketing: '衍生',
   export: '导出',
 }
 

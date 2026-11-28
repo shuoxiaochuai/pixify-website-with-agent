@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 
 import BrandMark from '@/components/BrandMark'
+import { workbenchEntry } from '@/lib/lastSession'
 
 export default function LandingHeader({ account }: { account: string | null }) {
   return (
@@ -14,7 +15,7 @@ export default function LandingHeader({ account }: { account: string | null }) {
 
         {account ? (
           <Link
-            to="/create"
+            to={workbenchEntry(account)}
             className="border-line-strong text-ink hover:bg-soft rounded-control border px-3.5 py-1.5 text-sm font-medium transition-colors"
           >
             {account} · 进入工作台

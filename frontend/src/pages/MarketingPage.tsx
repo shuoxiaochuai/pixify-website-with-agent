@@ -82,7 +82,7 @@ function Workspace({ sessionId }: { sessionId: string }) {
         </p>
         {isError && (
           <Link to="/marketing" className="text-brand-strong mt-4 text-sm">
-            返回导出物料
+            返回导出
           </Link>
         )}
       </div>
@@ -154,14 +154,14 @@ function Workspace({ sessionId }: { sessionId: string }) {
 
       <section className="mb-8">
         <SectionHead
-          title="四类营销图"
+          title="四类衍生图"
           hint="以当前画布为参考生成，结果进图片墙，不改画布。"
         />
         <input
           value={copy}
           onChange={(event) => setCopy(event.target.value)}
           disabled={tools.busy}
-          placeholder="可选：海报文案或补充要求，例如「新品首发 限时 8 折」"
+          placeholder="可选：海报文案或补充要求，例如「夏日远行 去看看海」"
           className="border-line text-ink placeholder:text-faint rounded-control mb-3 w-full border px-3 py-2 text-sm outline-none"
         />
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -185,8 +185,8 @@ function Workspace({ sessionId }: { sessionId: string }) {
 
       <section className="mb-8">
         <SectionHead
-          title="投放尺寸"
-          hint="扩到目标比例，主体不被裁切。默认可一次出三个投放尺寸。"
+          title="尺寸适配"
+          hint="扩到目标比例，主体不被裁切。默认可一次导出三个尺寸。"
         />
         <div className="flex flex-wrap gap-2">
           <button
@@ -248,11 +248,11 @@ function PageTitle({ action }: { action?: ReactNode }) {
   return (
     <header className="mb-8">
       <div className="flex items-center justify-between gap-4">
-        <h1 className="text-ink text-2xl font-semibold tracking-tight">导出物料</h1>
+        <h1 className="text-ink text-2xl font-semibold tracking-tight">导出</h1>
         {action}
       </div>
       <p className="text-muted mt-1 max-w-xl text-sm">
-        从当前会话出四类营销图和投放尺寸，再打包下载。
+        从当前会话生成四类衍生图与多尺寸版本，再打包下载。
       </p>
     </header>
   )

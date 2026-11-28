@@ -11,10 +11,10 @@ export default function StartBanner({ label, to }: { label: string; to: string }
 
         <div className="relative">
           <h2 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">
-            把商品图交给智能体
+            把图片交给智能体
           </h2>
           <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-white/65">
-            登录即可开始，第一句需求就能拿到可上架的候选图。
+            登录即可开始，第一句需求就能拿到可用的候选图。
           </p>
 
           <Link

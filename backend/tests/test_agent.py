@@ -133,12 +133,12 @@ async def test_marketing_tool_is_planned_and_dispatched(signed_in: httpx.AsyncCl
     fake_planner(tool_call("generate_marketing", {"kind": "product"}))
     session_id = (await open_session(signed_in))["id"]
 
-    turn = await send(signed_in, session_id, "出一张商品主图")
+    turn = await send(signed_in, session_id, "生成一张纯净背景图")
 
     assert turn["status"] == "running"
     assert [step["tool"] for step in turn["steps"]] == ["generate_marketing"]
-    assert turn["steps"][0]["label"] == "营销图"
-    assert "营销图" in turn["reply"]
+    assert turn["steps"][0]["label"] == "衍生图"
+    assert "衍生图" in turn["reply"]
 
 
 async def test_plain_answer_dispatches_nothing(signed_in: httpx.AsyncClient, fake_planner):

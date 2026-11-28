@@ -32,9 +32,9 @@ async def open_session(client: httpx.AsyncClient, image: bytes | None = None, **
 
 
 async def test_new_session_starts_at_first_revision(signed_in: httpx.AsyncClient):
-    body = await open_session(signed_in, title="  白底 主图  ")
+    body = await open_session(signed_in, title="  白底 图片  ")
 
-    assert body["title"] == "白底 主图"
+    assert body["title"] == "白底 图片"
     assert body["revision"] == 1
     assert body["original_asset_id"] == body["current_asset_id"]
 

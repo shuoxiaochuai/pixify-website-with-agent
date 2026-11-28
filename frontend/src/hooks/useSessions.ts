@@ -10,6 +10,7 @@ import {
 } from '@/api/sessions'
 import { errorMessage } from '@/hooks/useAuth'
 import { useRun } from '@/hooks/useRun'
+import { forgetSession } from '@/lib/lastSession'
 import { offersUndo, toolLabel } from '@/lib/tools'
 import { toast } from '@/stores/toasts'
 
@@ -93,6 +94,8 @@ export function useDeleteSession() {
   return useMutation({
     mutationFn: (id: string) => sessionsApi.remove(id),
     onSuccess: (_detail, id) => {
+      // 删掉的正好是记住的那条时一并清掉，下次进入工作台不会落到失效地址
+      forgetSession(id)
       // ['session', id] 是前缀，详情、消息流、编辑记录的缓存一起清掉，
       // 否则切回同一个地址会先闪出已经不存在的内容
       queryClient.removeQueries({ queryKey: detailKey(id) })

@@ -22,26 +22,26 @@ class MarketingKind(enum.StrEnum):
 
 _PROMPTS = {
     MarketingKind.PRODUCT: (
-        "把商品放在纯白背景上，居中构图，柔和顶光，边缘干净，"
-        "保留商品原有材质与颜色，输出电商主图。"
+        "把画面主体放在纯白背景上，居中构图，柔和顶光，边缘干净，"
+        "保留主体原有材质与颜色，输出纯净背景图。"
     ),
     MarketingKind.SCENE: (
-        "把商品放到真实生活场景中，侧逆光、浅景深，氛围自然，"
-        "保留商品原有材质与颜色。"
+        "把画面主体放到真实生活场景中，侧逆光、浅景深，氛围自然，"
+        "保留主体原有材质与颜色。"
     ),
     MarketingKind.MODEL: (
-        "生成模特手持或佩戴该商品的半身展示图，简洁室内背景、自然光，"
-        "商品细节清晰可辨。"
+        "生成人物与画面主体自然互动的半身展示图，简洁室内背景、自然光，"
+        "主体细节清晰可辨。"
     ),
     MarketingKind.POSTER: (
-        "做一张促销海报，突出商品，右侧或下方留出文字区，构图干净有冲击力。"
+        "做一张海报，突出画面主体，右侧或下方留出文字区，构图干净有冲击力。"
     ),
 }
 
 
 class GenerateMarketingIn(BaseModel):
     kind: MarketingKind = Field(
-        description="product 商品主图、scene 场景氛围图、model 模特上身、poster 促销海报"
+        description="product 纯净背景、scene 场景氛围图、model 人物出镜、poster 文字海报"
     )
     caption: str | None = Field(default=None, max_length=200, description="海报文案或补充要求")
     count: int = Field(default=1, ge=1, le=4)
@@ -53,10 +53,10 @@ class PrepareDeliverySizesIn(BaseModel):
         default_factory=lambda: list(DELIVERY_RATIOS),
         min_length=1,
         max_length=len(Ratio),
-        description="要输出的投放比例。默认 1:1、4:5、9:16。主体不被裁切。",
+        description="要输出的目标比例。默认 1:1、4:5、9:16。主体不被裁切。",
     )
     prompt: str = Field(
-        default="自然延伸画面边缘，保持主体完整，不要裁切商品",
+        default="自然延伸画面边缘，保持主体完整，不要裁切主体",
         max_length=500,
     )
 
@@ -104,7 +104,7 @@ async def generate_marketing_exec(session: AsyncSession, run: ToolRun) -> dict:
     width, height = size_of(ratio)
     await runs.report(session, run, 15, "读取画布")
     source = await flatten_session(session, record)
-    await runs.report(session, run, 30, "生成营销图")
+    await runs.report(session, run, 30, "生成衍生图")
     images = await get_image_provider().edit(
         EditRequest(
             prompt=_prompt_of(kind, run.params.get("caption")),
@@ -116,7 +116,7 @@ async def generate_marketing_exec(session: AsyncSession, run: ToolRun) -> dict:
         on_progress=lambda progress, stage: _progress(session, run, progress, stage),
     )
     fitted = [resize_to(data, width, height) for data in images]
-    await runs.report(session, run, 95, "营销图已加入图片墙")
+    await runs.report(session, run, 95, "衍生图已加入图片墙")
     return await _store(
         session,
         run,
@@ -140,17 +140,17 @@ async def prepare_delivery_sizes_exec(session: AsyncSession, run: ToolRun) -> di
         await runs.report(session, run, 30 + int(60 * index / total), f"适配 {ratio.value}")
         images.append(letterbox(source, width, height))
         variants.append({"kind": "export", "ratio": ratio.value, "width": width, "height": height})
-    await runs.report(session, run, 95, "投放尺寸已加入图片墙")
+    await runs.report(session, run, 95, "尺寸适配已加入图片墙")
     return await _store(session, run, images, kind=AssetKind.EXPORT, variants=variants)
 
 
 GENERATE_MARKETING = ToolSpec(
     name="generate_marketing",
-    label="营销图",
+    label="衍生图",
     description=(
-        "按当前画布生成电商营销图，只进图片墙，不改当前画布。"
-        "kind：product 商品主图（白底）、scene 场景氛围图、"
-        "model 模特上身、poster 促销海报。caption 可填海报标题或补充要求。"
+        "按当前画布生成衍生图，只进图片墙，不改当前画布。"
+        "kind：product 纯净背景图、scene 场景氛围图、"
+        "model 人物出镜、poster 文字海报。caption 可填海报标题或补充要求。"
     ),
     params=GenerateMarketingIn,
     handler=generate_marketing_exec,
@@ -160,10 +160,10 @@ GENERATE_MARKETING = ToolSpec(
 
 PREPARE_DELIVERY_SIZES = ToolSpec(
     name="prepare_delivery_sizes",
-    label="投放尺寸",
+    label="尺寸适配",
     description=(
-        "把当前画布完整放入投放比例，不裁切、不改画面，只进图片墙。"
-        "默认一次出 1:1、4:5、9:16。用户说改尺寸、出投放物料时用这个，不要用 crop_canvas。"
+        "把当前画布完整放入目标比例，不裁切、不改画面，只进图片墙。"
+        "默认一次出 1:1、4:5、9:16。用户说改尺寸、出多尺寸版本时用这个，不要用 crop_canvas。"
     ),
     params=PrepareDeliverySizesIn,
     handler=prepare_delivery_sizes_exec,

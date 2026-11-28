@@ -1,301 +1,269 @@
 # AI 修图智能体
 
-> 本项目为教学项目，提供完整文字教程 + 简历写法 + 面试题解 + 答疑服务，帮你提升项目能力，给简历增加亮点！
->
-> ⭐️ 加入项目系列学习：[加入编程导航](https://www.codefather.cn/vip)
-
-## 一、项目介绍
-
-这是一套以 **AI Agent 驱动的图片编辑** 为核心的全栈项目教程，基于 Python 3.13 + FastAPI + LangChain + LangGraph + React 19 + Konva。你只需要输入一句话，AI 就能自动规划修图步骤、调用 21 种编辑工具帮你完成专业级修图，从文生图到抠图调色、区域编辑、图层拆分，全部自动搞定。
-
-![](https://pic.yupi.icu/pine/image-20260901150955859.png)
-
-### 为什么做这个项目？
-1）赛道火热：AI 修图和 AI 生图是目前最热门的 AI 应用方向之一，各大厂和创业公司都在布局。掌握 AI 图像处理和智能体开发，求职时非常有竞争力。
-
-2）技术含量高：这个项目涉及的技术面很广，从后端的 LangChain 模型接入、LangGraph 智能体、异步任务队列、对象存储，到前端的 Canvas 画布引擎、图层系统、选区交互，再到 AI 模型的文生图、语义分割、图像编辑，远不是增删改查能比的。
-
-3）全栈实战：一个项目同时练 Python 后端和 React 前端，后端重点在 Agent 架构和图像处理管线，前端重点在画布引擎和复杂交互，两端都有大量值得写进简历的技术点。
-
-
-### 8 大核心能力
-
-1）AI 文生图，输入提示词就能出图
-
-在创作页输入一段提示词，AI 自动生成四张候选图，以四宫格的形式展示给你挑选。整个生成过程通过 SSE 实时推送进度，不用傻等，随时知道跑到哪一步了。选中满意的图片后，直接进入编辑器开始修图。
-
-![](https://pic.yupi.icu/pine/image-20260901142856191.png)
-
-
-
-2）专业级画布编辑器
-
-基于 react-konva 搭建了一个真正能用的图片编辑器，支持画布缩放平移、图层文档管理、撤销重做，还有前后对比滑杆，一拖就能看到修图前后的效果。这不是玩具级 demo，而是对标专业修图软件的交互体验。
-
-![](https://pic.yupi.icu/pine/image-20260831153713493.png)
-
-
-
-3）自然语言驱动修图
-
-这是整个项目最酷的能力。你在对话框里输入一句话，比如“把背景换成海滩”、“提高亮度和饱和度”，AI Agent 会自动分析你的需求，规划出修图步骤，然后一步步调用工具帮你执行。不需要你去找按钮、调参数，说一句话就搞定。
-
-![](https://pic.yupi.icu/pine/image-20260831155606100.png)
-
-
-
-4）21 种编辑工具，覆盖主流修图场景
-
-项目内置了丰富的编辑工具：rembg 一键抠图、11 参调色（亮度/对比度/饱和度/色温等）、裁剪/翻转/缩放/旋转/移动等画布变换、AI 换背景、AI 扩图、超分辨率放大。手动点击工具栏可以用，Agent 也能自动调用，UI 和 Agent 共享同一套工具注册表。
-
-![](https://pic.yupi.icu/pine/image-20260831160551720.png)
-
-
-
-5）智能区域选择
-
-集成了 SAM（Segment Anything Model）点选能力，鼠标点一下就能精准选中画面中的任意物体。还支持笔刷涂抹模式，自由绘制选区。首次点击计算 embedding，后续点击只跑 decoder，响应速度是毫秒级的。
-
-![](https://pic.yupi.icu/pine/Google%20Chrome%202026-08-31%2016.09.05.png)
-
-
-
-6）局部精细编辑
-
-有了选区之后，可以做局部消除和局部替换。局部消除会用 AI inpainting 把选区内的东西抹掉，自动填补背景；局部替换可以用一句提示词描述你想换成什么，只改选区内容，其他地方纹丝不动。
-
-![](https://pic.yupi.icu/pine/image-20260901141549744.png)
-
-
-
-7）图层拆分和独立操作
-
-一键把图片按语义拆成主体层和背景层，还可以选择拆出 OCR 文字层。拆完之后每个图层可以独立缩放、调色、移动，互不影响。还支持点选画面中的任意物体，把它提升为独立图层，背景自动修复。图层数据用 JSONB 持久化，切换图片再切回来，图层结构不会丢。
-
-![](https://pic.yupi.icu/pine/image-20260831161340074.png)
-
-
-
-8）多步计划和人机协作
-
-当修图需求比较复杂时，AI 会输出一份包含多个步骤的结构化 JSON 计划，每一步标注了依赖关系。服务端会做工具存在性校验、参数合法性检查、依赖补全和环检测，然后按拓扑排序确定执行顺序。用户可以在计划卡片上确认执行、单步重试或取消后续，真正做到人机协作，AI 干活你把关。
-
-![](https://pic.yupi.icu/pine/image-20260831161657975.png)
-
-
-
-## 二、项目收获
-
-本项目选题新颖，紧跟 AI Agent 和 AIGC 趋势，以 **专业级 AI 修图工具** 为目标。区别于增删改查的烂大街项目，你将从零搭建一个集画布编辑器、AI Agent、异步任务、图层系统于一体的全栈应用，技术深度和广度都远超普通项目。
-
-项目内容丰富扎实，前后端 + AI Agent 全链路覆盖，帮你成为 AI 时代企业的香饽饽，给你的简历和求职大幅增加竞争力！
-
-Python 全栈 + LangChain / LangGraph Agent + 专业画布编辑器 + 异步任务 + 图层系统，技术丰富，玩透 AI Agent 全栈项目开发~
-
-![](https://pic.yupi.icu/pine/exec-78d8e822-f4ff-4152-9e72-0580bd4041ba.png)
-
-本项目给大家讲的是 **通用的 AI Agent 开发方法和真实工具产品从 0 到部署的全流程**，从这个项目中你可以学到：
-
-+ 如何基于 FastAPI + SQLAlchemy 搭建 Python 全栈项目，实现 JWT Cookie 认证？
-+ 如何设计 Provider 抽象层，一行配置切换 Mock 和真实 AI 模型？
-+ 如何用 ARQ 异步队列 + Redis Pub/Sub + SSE 实现实时进度推送？
-+ 如何用 react-konva 搭建专业级图片编辑器，支持图层文档和视口变换？
-+ 如何用 LangChain 接入规划模型，再用 LangGraph 构建 AI Agent，让大模型规划修图步骤？
-+ 如何设计统一的工具注册表，一处定义同时服务 UI 和 Agent？
-+ 如何用 SAM 模型实现智能点选，一键选中任意物体？
-+ 如何做图层拆分，把一张图拆成主体、背景和文字三个独立图层？
-+ 如何实现多步计划的服务端校验、拓扑排序和人机协作？
-+ 如何用 Docker 多阶段构建和 compose profile 实现一条命令部署？
-
-### 编程导航系列项目优势
-
-此外，还能学会很多架构设计、方案取舍、问题排查的方法，提升独立解决复杂问题的能力。本项目还给大家提供了大量的项目扩展点，有能力的同学可以进一步拉开和别人的区分度，无限进步！
-
-满满的项目正反馈：
-
-![编程导航 26 年报喜](https://pic.yupi.icu/1/%E7%BC%96%E7%A8%8B%E5%AF%BC%E8%88%AA%2026%20%E5%B9%B4%E6%8A%A5%E5%96%9C%E6%88%AA%E5%9B%BE.png)
-
-除视频教程外，编程导航的项目还提供：
-
-| 教程资料                     | 求职助力                       |
-| ---------------------------- | ------------------------------ |
-| 详细的文字教程 / 直播笔记    | ⭐️ 现成的简历写法，直接写满简历 |
-| 完整的项目源码               | ⭐️ 项目相关面试题解和真实面经   |
-| 1 对 1 答疑解惑 + 专属交流群 | ⭐️ 项目扩展思路，拉开区分度     |
-| 前端 + Java 后端万用项目模板 | ⭐️ 从学项目到拿 Offer 一条龙    |
-
-![](https://pic.yupi.icu/1/%E9%B1%BC%E7%9A%AE%E9%A1%B9%E7%9B%AE%E5%AE%9E%E6%88%98%E7%9A%84%E4%BC%98%E5%8A%BF%E5%A4%A7.jpeg)
-
-## 三、更多介绍
-
-该项目功能完整，涵盖文生图、画布编辑器、AI Agent 对话、编辑工具、区域选择、局部编辑、图层系统、多步计划、营销图、批量处理 10 大模块，覆盖了一个真实 AI 修图产品的核心业务场景。
-
-![](https://pic.yupi.icu/pine/feature-modules.png)
-
-本项目采用前后端分离 + 异步 Worker 架构。前端是 React 19 + Konva 的单页应用，后端是 Python FastAPI 服务，通过 REST API 和 SSE 通信。
-
-后端内部按照路由层、业务服务层、数据访问层分层，AI 生图、抠图、扩图等耗时任务通过 ARQ 异步队列提交到独立 Worker 执行，结果通过 Redis Pub/Sub + SSE 实时推送给前端。LangChain 负责接入规划模型和绑定工具签名，LangGraph 负责 Agent 的计划编排，ToolRegistry 统一管理所有编辑工具的元信息和执行逻辑。数据分别落在 PostgreSQL（业务数据）、Redis（缓存和消息）和 MinIO（图片资源）中。
-
-![](https://pic.yupi.icu/pine/system-architecture.png)
-
-项目的核心业务流程非常清晰，能够帮你理清 AI Agent 项目开发的思路，比如一次 AI 修图请求的完整链路：用户输入自然语言指令 → Agent 规划修图步骤 → 服务端校验和拓扑排序 → 用户确认计划 → 按依赖自动执行工具 → 结果推送前端 → 画布实时更新。
-
-![](https://pic.yupi.icu/pine/business-flow.png)
-
-## 四、快速运行
-
-> 完整的保姆级步骤请参考[《保姆级本地运行指南》](https://www.codefather.cn/course/2099386518517915649/section/2099389234463973378)
-
-### 前置条件
-
-- Docker >= 20（含 Compose）
-- Python >= 3.13
-- Node.js >= 18（推荐 20+）
-- 一个 [阿里云百炼 API Key](https://bailian.console.aliyun.com/)（🔧 可选，用于 AI 文生图、图像编辑和 Agent 对话）
-
-### 1. 克隆项目
-
-```bash
-git clone https://github.com/yuyuanweb/ai-retouch-agent.git
-cd ai-retouch-agent
+一个由 LLM Agent 驱动的通用 AI 图片编辑器。用户用一句自然语言描述需求，Agent 负责理解、拆解并调用工具完成生成、修图、局部编辑、拆层与尺寸适配，结果实时回流到前端画布。
+
+- 前端：React 19 + TypeScript + Konva
+- 后端：FastAPI + LangChain / LangGraph + ARQ Worker
+- 数据：PostgreSQL（业务数据）+ Redis（队列与事件）+ S3 兼容存储（图片）
+
+## 功能
+
+### 对话式修图
+
+- 指令分流：修图动作、无关提问、两者混合的一句话分别走不同通道，互不丢步。
+- 多步规划：Agent 一次输出完整工具调用序列，服务端做存在性、参数与依赖校验后再执行。
+- 过程可见：阶段、步骤与正文增量通过 SSE 推送，支持流式输出与伪思考展示。
+- 任务控制：可取消进行中的智能修图，可删除单条对话消息。
+
+### 画布编辑器
+
+- 基于 react-konva 的画布，支持缩放、平移、图层文档、撤销重做与前后对比。
+- 图层可单独缩放、旋转、移动、调色、改透明度、改显隐、调整层序。
+- 工具栏与 Agent 共用同一套工具定义，界面点按和自然语言调用行为一致。
+
+### 编辑工具（24 个）
+
+| 分组 | 工具 |
+| --- | --- |
+| 生成 | `generate_image` 文生图、`generate_marketing` 衍生图、`prepare_delivery_sizes` 尺寸适配 |
+| 一键处理 | `smart_edit` 自然语言整图编辑、`replace_background` 换背景、`remove_background` 去背景、`expand_canvas` 扩图、`upscale_image` 超分、`adjust_image` 调色 |
+| 区域编辑 | `replace_region` 局部替换、`erase_region` 局部消除（均依赖选区） |
+| 图层与画布 | `split_layers` 拆层、`promote_object_to_layer` 提升为图层、`crop_canvas` 裁剪，以及翻转、缩放、旋转、移动、层序、透明度、显隐、文字层共 11 个操作 |
+| 批量 | `batch_process` 多图同套处理 |
+| 领域能力 | `segment_lesion` 眼底病灶分割 |
+
+### 选区与局部编辑
+
+- 点选分割（SAM）与笔刷两种选区方式，点选时后续点击只跑 decoder。
+- 局部消除用 inpainting 填补背景，局部替换只改选区内容，其余像素保持不变。
+
+### 图层
+
+- 一键把图片拆成主体层与背景层，可选拆出 OCR 文字层。
+- 任意物体可提升为独立图层，背景自动修复。
+- 图层文档以 JSONB 持久化，切换图片再切回不丢结构。
+
+### 生成与交付
+
+- 文生图一次生成多张候选，四宫格挑选后进入编辑器。
+- 衍生图支持纯净背景、场景氛围图、人物出镜、文字海报四类，结果只进图片墙，不动当前画布。
+- 尺寸适配按 1:1、4:5、9:16 等比例完整放入画布，不裁切主体。
+- 批量处理对多张图执行同一套操作，进度实时回传。
+- 导出打包为 zip，附 `manifest.json`，可只导出当前画布或图片墙产物。
+
+### 病灶分割
+
+内置 CAUNet 推理模块，对眼底图标注出血点、硬性渗出、微血管瘤、软性渗出。无 GPU、无 torch 或无权重时直接返回可展示的不可用原因，不影响其他功能启动。
+
+## 技术栈
+
+| 层 | 选型 |
+| --- | --- |
+| 前端 | React 19、TypeScript、Vite、react-router-dom、zustand、TanStack Query、konva / react-konva、Tailwind CSS |
+| 后端 | Python ≥ 3.13、FastAPI、Pydantic Settings、SQLAlchemy 2（async）、Alembic |
+| Agent | LangChain Core、LangGraph、OpenAI 兼容接口（DashScope 千问） |
+| 任务与消息 | ARQ、Redis（Pub/Sub + Stream）、SSE |
+| 图像处理 | Pillow、NumPy、OpenCV、rembg / ONNX Runtime、RapidOCR |
+| 存储 | PostgreSQL、S3 / MinIO |
+| 模型推理 | PyTorch、CAUNet（病灶分割，仅 Linux 部署机安装） |
+
+## 架构
+
+后端按路由层、服务层、工具执行层分层，像素类工具通过 ARQ 异步队列提交到独立 Worker 执行，进度经 Redis Pub/Sub 与 Stream 推送，再由 `/events` 的 SSE 端点转给浏览器。只改图层文档的工具当场执行，不占用队列。
+
+一次修图请求的链路：
+
+1. 用户提交一句话，写入 `AgentRun` 并派发后台任务。
+2. 分流判断通道；混合句先拆成修图段与提问段。
+3. 修图段交给规划模型，输出工具调用计划。
+4. 服务端校验工具名、参数、依赖并补全顺序，失败时重规划一次。
+5. 执行外壳按步落 `ToolRun`，像素工具入队，Worker 执行并上报进度。
+6. 画布修订号递增、结果落库，过程与结果通过 SSE 推给前端。
+7. 前端更新画布、图片墙、计划卡片与对话内容。
+
+## 目录结构
+
+```
+backend/
+  app/
+    agent/       分流、拆分、规划、LangGraph 编排、LLM 接入
+    edits/       图层文档操作、像素管线、蒙版、分割、拆层、OCR、渲染
+    eval/        离线评测：用例、任务、指标、运行器
+    lesion/      CAUNet 病灶分割：模型、推理、掩码对齐
+    models/      SQLAlchemy 模型：用户、素材、会话、编辑历史、工具运行、Agent 轮次
+    providers/   图像生成/编辑供应层：mock 与 dashscope
+    routers/     health、auth、assets、sessions、runs、batches、lesion、events
+    schemas/     请求/响应模型
+    services/    业务服务：会话、素材、生成、工具执行、导出、选区、批量
+    tasks/       ARQ 任务：工具执行、连通性检查
+    tools/       24 个工具的注册表与实现
+    config.py    环境变量与路径
+    db.py        异步引擎与会话工厂
+    events.py    Redis 发布/订阅/Stream
+    layers.py    图层文档模型与解析
+    queue.py     入队与中止
+    worker.py    ARQ Worker 入口
+    main.py      FastAPI 装配与前端同源托管
+  migrations/    Alembic 迁移
+  tests/         pytest（mock 隔离模型与第三方调用）
+frontend/
+  src/
+    api/         各资源的 HTTP 客户端与 SSE
+    components/  落地页、编辑器、通用 UI
+    hooks/       数据请求、选区、任务、画布缩放等
+    layouts/     登录守卫与工作台布局
+    lib/         工具定义、图层操作、批处理步骤等
+    pages/       落地页、创作、候选、编辑器、衍生图、批量、认证
+    stores/      zustand：画布视口、编辑器 UI、提示
+deploy/          裸机部署脚本与 supervisor 配置
+deploy.ps1       Windows 侧推送脚本
+Dockerfile       多阶段构建，前端产物打进后端镜像
+docker-compose.yml  中间件与 deploy profile 全栈
 ```
 
-### 2. 启动中间件
+## 核心代码说明
+
+### Agent 编排
+
+`app/agent/graph.py` 是核心。状态图从分流开始：`triage.classify` 用关键词命中加一次模型调用判定通道，`triage.split` 在句子同时包含提问与修图动作时按标点与连接词拆分，两条通道各自产出结果再合并。规划阶段把画布摘要与工具签名交给模型，`plan.validate` 负责工具存在性、参数合法与依赖检查；模型只回了散文式调用或漏掉动作时，会做一次兜底解析与重规划。执行阶段逐条派发工具，并把阶段事件通过 `publish_turn` 写入 Redis Stream，晚连上的订阅者也能补齐开头。
+
+`app/agent/llm.py` 统一构造规划、分流、闲聊三类模型客户端；`providers/` 则负责真正调用图像生成与图像编辑模型，`mock` 可在无 API Key 时跑通全链路。
+
+### 工具注册表
+
+`app/tools/base.py` 的 `ToolSpec` 同时描述界面与 Agent 所需的全部信息：名称、展示标签、说明、Pydantic 参数模型、执行函数、是否入队、是否隐藏参数。`app/tools/__init__.py` 汇总全部工具；新增工具只要在这里登记，界面工具栏、Agent 函数签名与服务端校验就会同步生效，不会出现两套定义漂移。
+
+### 图层文档与渲染
+
+`app/layers.py` 定义 `LayerDocument`：画布宽高加图层数组，图层含类型、变换、透明度、文字属性。`app/edits/document.py` 里的每个函数都返回新文档（写时复制），保证一次编辑对应一条历史记录、可整体撤销。`app/edits/render.py` 按图层顺序合成像素，`edits/pixels.py` 提供缩放、letterbox、编码等底层工具。
+
+### 选区与像素管线
+
+选区存在 Redis 中，按会话与修订号隔离，`services/selections.py` 负责读写，`routers/sessions.py` 暴露接口。分割由 `edits/segment.py` 完成，点选与笔刷共用同一套蒙版格式；`edits/mask.py` 负责蒙版与原图的对齐、羽化与合成，`edits/split.py` 负责拆层与物体提升，`edits/ocr.py` 在安装 RapidOCR 时提供文字层识别。
+
+### 异步任务与进度
+
+`queue.py` 以 run id 作为任务 ID，重复投递不会执行两次；中止信号写入 ARQ 的中止集合，Worker 轮询到后掐断任务。`worker.py` 是 ARQ 入口，`tasks/tools.py` 是统一执行外壳：落状态、调工具、上报进度、写结果。`events.py` 提供 run 的 Pub/Sub 与 turn 的 Stream 两种通道，`routers/events.py` 把两者包装成 SSE，空闲时发心跳。
+
+### 会话、资产与导出
+
+`models/` 中用户、素材、会话、图片墙关联、编辑历史、工具运行、Agent 轮次各自独立；`services/sessions.py` 维护画布修订号与当前图切换，`services/assets.py` 负责落盘与同源文件代理，`services/exports.py` 生成 zip 与清单。图片不依赖对象存储的公开读，统一走 `/api/assets/{id}/file`。
+
+### 评估
+
+`app/eval` 是可离线运行的评测器：按目录读取用例与素材，逐任务执行图像操作，计算像素与指标并输出报告。默认自带一组示例用例，可通过 `python -m app.eval <数据目录>` 指定自己的评测集。
+
+### 病灶分割
+
+`app/lesion/engine.py` 对齐训练与验证时的预处理链（短边缩放、中心裁剪、CLAHE、绿通道），模型输出概率后按阈值二值化并着色；`lesion/masks.py` 处理掩码回贴与 Dice 计算。`lesion/caunet.py` 与 `layers.py` 逐字取自训练仓库，因此不参与格式化。
+
+### 配置与安全
+
+`config.py` 用 Pydantic Settings 读取仓库根目录 `.env`，模型名、供应方、存储与数据库地址都可切换。认证使用 httpOnly Cookie + JWT，密码经 bcrypt 哈希；所有资源查询都带用户条件，跨用户访问统一返回 404。
+
+## 本地运行
+
+前置条件：Docker（含 Compose）、Python ≥ 3.13、Node.js ≥ 18，以及可选的 DashScope API Key。
 
 ```bash
+# 中间件：PostgreSQL 7311、Redis 7312、MinIO 7313
 docker compose up -d
 ```
 
-### 3. 启动后端
+```bash
+# 后端
+cd backend
+curl -LsSf https://astral.sh/uv/install.sh | sh   # Windows 用 powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+uv sync --all-extras
+cp .env.example .env                               # IMAGE_PROVIDER=mock 可零额度跑通
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 7302
+```
 
 ```bash
+# Worker（另开终端）
 cd backend
-
-# 安装 uv（已有可跳过）
-curl -LsSf https://astral.sh/uv/install.sh | sh   # Windows: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-
-# 安装依赖（国内可加 --index-url https://pypi.tuna.tsinghua.edu.cn/simple）
-uv sync --all-extras
-
-# 配置环境变量
-cp .env.example .env                  # 至少确认 IMAGE_PROVIDER，mock 免费跑通全流程，dashscope 接真实模型
-
-# 初始化数据库
-uv run alembic upgrade head
-
-# 启动 API 服务（终端一）
-uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 7302
-
-# 启动 Worker（新开终端二）
 uv run arq app.worker.WorkerSettings
 ```
 
-启动成功后访问 [http://localhost:7302/api/health](http://localhost:7302/api/health)，三个字段全是 `ok` 即为正常。
-
-### 4. 启动前端
-
-**新开一个终端**：
-
 ```bash
+# 前端（另开终端）
 cd frontend
-npm install                           # 国内可加 --registry=https://registry.npmmirror.com
-npm run dev
+npm install
+npm run dev        # http://127.0.0.1:7301，/api 与 /events 代理到 7302
 ```
 
-浏览器打开 [http://localhost:7301](http://localhost:7301) 即可使用。
+健康检查：`GET http://localhost:7302/api/health`，字段全部为 `ok` 即正常。
 
-### 5. 运行测试
+### 测试与检查
 
 ```bash
 cd backend
 uv run pytest
+uv run ruff check .
 ```
 
-测试通过 mock 隔离了大模型和第三方接口调用，不消耗 API 额度。
+```bash
+cd frontend
+npm run build      # tsc -b + vite build
+npm run lint       # oxlint
+```
 
-### 6. 部署（Docker）
+测试通过 mock 隔离大模型与第三方接口，不消耗 API 额度。
 
-`Dockerfile` 提供了多阶段构建，前端编译后打进后端镜像同源托管。服务器上只需放开 **7302** 一个端口，然后：
+### 关键环境变量
+
+| 变量 | 作用 | 默认 |
+| --- | --- | --- |
+| `IMAGE_PROVIDER` | `mock` 或 `dashscope` | `mock` |
+| `DASHSCOPE_API_KEY` | 百炼 API Key | 空 |
+| `TEXT_TO_IMAGE_MODEL` / `IMAGE_EDIT_MODEL` | 文生图与图像编辑模型 | `qwen-image-3.0-pro` / `qwen-image-edit-max` |
+| `PLANNER_MODEL` / `INTENT_MODEL` / `CHAT_MODEL` | 规划、分流、闲聊模型 | `qwen-plus` / `qwen-flash` / `qwen-plus` |
+| `DATABASE_URL` / `REDIS_URL` | 数据库与 Redis 地址 | 本地 7311 / 7312 |
+| `S3_ENDPOINT` / `S3_BUCKET` | 对象存储 | 本地 7313 / `retouch` |
+| `JWT_SECRET` | 会话签名密钥，生产必改 | 开发占位值 |
+| `MATTING_PROVIDER` | `auto` 有 rembg 用之，否则四角抠图 | `auto` |
+| `OCR_PROVIDER` | `auto` / `none` | `auto` |
+| `LESION_MODEL_*` / `LESION_DEVICE` / `LESION_THRESHOLD` | 病灶分割权重与推理设置 | 空 / `auto` / `0.5` |
+
+## 部署
+
+`Dockerfile` 为多阶段构建，前端编译产物由后端同源托管，对外只需暴露 **7302** 一个端口：
 
 ```bash
 cp .env.example .env
-# 生产环境必改：JWT_SECRET（openssl rand -hex 32）
-# S3_PUBLIC_ENDPOINT 保持为空：图片走 /api/assets/{id}/file 同源代理，不需要暴露 7313
-
+# 生产环境至少修改 JWT_SECRET
 docker compose --profile deploy up -d --build
 docker compose --profile deploy exec app alembic upgrade head
 ```
 
-浏览器打开 `http://你的公网IP:7302`。
+没有 docker daemon 的算力平台实例使用 `deploy/` 下的裸机方案：`bootstrap.sh` 重建环境、supervisor 配置与数据库迁移，`retouch` 命令负责日常状态、重启、日志与备份，Windows 侧用 `deploy.ps1` 推送。改后端代码后 `app` 与 `worker` 必须同时重启。
 
-> 不要把 7313（MinIO）开到公网：它的默认凭据很弱，暴露出去等于把整桶原图交给任何人拖取。
+注意：不要将 MinIO（7313）暴露到公网；`/api/auth/register` 是开放注册，公网演示前应控制访问范围。
 
-### 7. 裸机部署（没有 docker daemon 的算力平台实例）
+## 版本更新记录
 
-这类实例里装不了 docker，进程管理改用 supervisor，相关脚本都在 `deploy/` 下：
-
-| 文件 | 在哪跑 | 作用 |
+| 版本 | 日期 | 说明 |
 | --- | --- | --- |
-| `deploy/bootstrap.sh` | 服务器上，root | 一条命令重建 `/etc/retouch/env`、`/etc/retouch/supervisord.conf`、`/usr/local/bin/retouch`、系统依赖、数据库集群与迁移 |
-| `deploy.ps1` | 本地 Windows | 打包校验 → 备份 → 解包 → `uv sync` → `alembic` → `.env` 合并 → `dist` 原子替换 → 全栈重启 |
+| 1.4 | 2026-11-28 | 问题修复 |
+| 1.3 | 2026-11-28 | 增加自动阈值验证 |
+| 1.2 | 2026-11-27 | 问题修复 |
+| 1.1 | 2026-11-27 | 问题修复 |
+| 1.0 | 2026-11-27 | 病灶分割功能内嵌网页 |
+| 0.15 | 2026-11-27 | 问题修复 |
+| 0.14 | 2026-11-27 | 去背景功能修复 |
+| 0.13 | 2026-11-27 | 对话支持删除单条消息；取消任务可停掉进行中的智能修图 |
+| 0.12 | 2026-11-27 | 问题修复 |
+| 0.11 | 2026-11-27 | 问题修复 |
+| 0.10 | 2026-11-27 | 问题修复 |
+| 0.9 | 2026-11-27 | 增加服务器部署能力 |
+| 0.8 | 2026-11-27 | 图片墙支持删除历史版本 |
+| 0.7 | 2026-11-27 | 复合提问优化 |
+| 0.6 | 2026-11-27 | 支持其他网络访问网站 |
+| 0.5 | 2026-11-27 | 增加删除对话功能 |
+| 0.4 | 2026-11-27 | 增加流式输出与思考过程展示 |
+| 0.3 | 2026-11-27 | 内置模型支持简短闲聊 |
+| 0.2 | 2026-11-27 | 修复复杂修图指令误判，正确调用生图模型 |
+| 0.1 | 2026-11-27 | 内置 AI 读懂自然语言并调用千问生图 |
 
-服务器侧：
-
-```bash
-bash deploy/bootstrap.sh --check     # 只读体检，报告缺什么，不改任何东西
-bash deploy/bootstrap.sh             # 全量重建/补齐，可反复执行
-bash deploy/bootstrap.sh --skip-sync --skip-migrate   # 换实例但数据盘完好时
-```
-
-`bootstrap.sh` 的端口与数据库凭据全部从 `.env` 解析，所以改 `.env` 后重跑一遍就能保持配置、supervisor 定义与实际监听端口三者一致。日常操作统一走 `retouch`：
-
-```bash
-retouch status / health / restart / check
-retouch logs worker        # 抠图、生成类任务在 worker 里跑，不在 app 日志里
-retouch-backup             # pg_dump + 配置 + 对象存储打包
-```
-
-本地侧（PowerShell）：
-
-```powershell
-# 先看要执行什么，不上传不连接
-powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1 -DryRun -Backend -Clean -Sync -Migrate
-# 真正推送：顺序很重要，代码在前，依赖与迁移在重启之前
-powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1 -Backend -Sync -Migrate
-powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1 -Frontend
-```
-
-`-Sync` 第一次装 torch 与 CUDA 轮子要拉约 6 GB：这一步用 `ssh -t` 给远端分配了终端，uv 会在原地刷新下载进度；即使没拿到 TTY，本地也会每 30 秒打印一次已耗时。停在同一个百分比上很久只是单个 wheel 太大，不是卡死。
-
-五个坑：
-
-- **supervisord 是守护进程，SSH 断开不影响服务**；但算力平台一般没有 systemd，实例重启后要有人登录一次才会自动拉起，无人值守时补一次 `ssh -p <端口> root@<主机> "retouch up"`。
-- **改后端代码必须同时重启 `app` 和 `worker`**，两者共用同一套代码，只重启 app 会出现接口是新的、执行逻辑是旧的。`deploy.ps1` 末尾的 `retouch restart` 已经覆盖。
-- **`deploy.ps1` 里的字符串不要用中文**。Windows PowerShell 5.1 读无 BOM 文件时用系统 ANSI 码页（GBK），中文字节会把紧随其后的闭合引号当 GBK 尾字节吞掉，得到一堆假的 `&& 不是有效语句分隔符` 报错，且报错行号远离真正的元凶。改完跑这一句自检：
-
-  ```powershell
-  $e=$null; [Management.Automation.Language.Parser]::ParseFile("$PWD\deploy.ps1",[ref]$null,[ref]$e); $e
-  ```
-
-- **传给 `ssh` 的远端命令里不要用双引号**。PowerShell 把参数交给原生程序（`ssh.exe`、`bash.exe`）时走 MSVCRT 命令行解析，字符串里的 `"` 会被当成定界符吃掉，远端 bash 收到的是**没有引号**的命令。两个后果都真实发生过：`"$UVBIN" sync` 退化成执行 coreutils 的 `/bin/sync`（报 `sync: unrecognized option '--all-extras'`）；`[ -x "$UVBIN" ]` 变成 `[ -x $UVBIN ]`，而值为空时这个判断**为真**，整条兜底链被跳过。要引号就用单引号（在 PS 单引号串里写两个 `''` 代表一个），或者像 `deploy.ps1` 那样用 `${VAR:-/nonexistent}` 保证空值也占一个词。本地可复现：`& 'D:\Git\bin\bash.exe' -c 'find backend -name "*.py" -not -path "*/.venv/*"'` 会报 `paths must precede expression`。
-- 公网可达时 `/api/auth/register` 是完全开放的，任何人都能建号并消耗你的模型额度。演示前先注册好几个账号再把链接发出去。
-
-
-
-## 加入项目学习
-
-编程导航已有 **近 30 套项目教程！** 每个项目的学习重点不同，从 0 到 1 带做，有大量完整的 **AI 应用开发 + AI 编程 + 全栈项目**，零基础也能学！
-
-详细请见：[https://codefather.cn/course](https://www.codefather.cn/course)（在该页面右侧有教程推荐和学习建议）
-
-![](https://pic.yupi.icu/1/%E9%A1%B9%E7%9B%AE%E6%95%99%E7%A8%8B.png)
-
-欢迎加入 [编程导航](https://www.codefather.cn/vip)，加入后不仅可以全程跟学本项目，往期 **近 30 套原创项目教程** 也都可以无限回看。还能享受更多原创技术资料、学习和求职指导、上百场面试回放视频，开启你的编程起飞之旅~
-
-🧧 助力新项目学习，给大家发放 **限时编程导航优惠券**，扫码即可领券加入。加入三天内不满意可全额退款，欢迎加入体验，名额有限，速来学习！
-
-![](https://pic.yupi.icu/1/437345684-56411098-b60e-4267-8ba2-4ebc5d416afc.png)
-
-1 天不到 1 块钱，绝对是对自己最值的投资！成为编程导航会员后，可以解锁近 30 套项目的教程和资料，PC 网站和 APP 都可以学习，如图：
-
-![](https://pic.yupi.icu/1/image-20250120113756426-20250422160856746.png)
+0.1 之前的提交为项目初始搭建：账号注册登录、素材上传与对象存储、画布编辑器、图层与选区、批量处理、导出打包等基础能力。

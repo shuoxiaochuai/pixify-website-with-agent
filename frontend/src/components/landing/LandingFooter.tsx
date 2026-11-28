@@ -7,7 +7,7 @@ export default function LandingFooter() {
         <BrandMark size="sm">
           <span className="text-muted font-medium">AI 修图智能体</span>
         </BrandMark>
-        <p>为电商运营与内容创作者打造的商品物料工作台</p>
+        <p>面向所有人的 AI 图片生成与编辑工作台</p>
       </div>
     </footer>
   )

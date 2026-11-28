@@ -6,7 +6,7 @@ const KIND_LABELS: Record<AssetKind, string> = {
   subject: '主体',
   background: '背景',
   mask: '遮罩',
-  marketing: '营销',
+  marketing: '衍生',
   export: '导出',
 }
 

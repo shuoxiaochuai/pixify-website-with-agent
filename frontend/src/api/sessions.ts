@@ -102,8 +102,8 @@ export const ACTION_LABELS: Record<string, string> = {
   split_layers: '拆层',
   promote_object_to_layer: '提升为图层',
   segment_lesion: '病灶分割',
-  generate_marketing: '营销图',
-  prepare_delivery_sizes: '投放尺寸',
+  generate_marketing: '衍生图',
+  prepare_delivery_sizes: '尺寸适配',
 }
 
 export type ExportPack = {
@@ -158,9 +158,9 @@ async function downloadExport(id: string, asset_ids: string[]): Promise<ExportPa
 }
 
 function filenameOf(header: string | null): string {
-  if (!header) return '物料.zip'
+  if (!header) return '导出.zip'
   const encoded = /filename\*=(?:UTF-8'')?([^;]+)/i.exec(header)
   if (encoded) return decodeURIComponent(encoded[1])
   const plain = /filename="?([^"]+)"?/i.exec(header)
-  return plain?.[1] ?? '物料.zip'
+  return plain?.[1] ?? '导出.zip'
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
+import { ApiError } from '@/api/client'
 import CanvasHint from '@/components/editor/CanvasHint'
 import CanvasStage from '@/components/editor/CanvasStage'
 import EditorToolbar from '@/components/editor/EditorToolbar'
@@ -9,6 +10,7 @@ import LayerPanel from '@/components/editor/LayerPanel'
 import SessionSidebar from '@/components/editor/SessionSidebar'
 import ProgressBar from '@/components/ui/ProgressBar'
 import { buttonClass } from '@/components/ui/buttonStyles'
+import { useCurrentUser } from '@/hooks/useAuth'
 import { useMountTransition } from '@/hooks/useMountTransition'
 import { useSelection } from '@/hooks/useSelection'
 import {
@@ -17,6 +19,7 @@ import {
   useSession,
   useSessionTools,
 } from '@/hooks/useSessions'
+import { forgetSession, rememberSession } from '@/lib/lastSession'
 import { ZOOM_STEP, useCanvasView } from '@/stores/canvasView'
 import { useEditorUi } from '@/stores/editorUi'
 
@@ -42,7 +45,8 @@ export default function EditorPage() {
 }
 
 function Workspace({ sessionId }: { sessionId: string }) {
-  const { data: session, isError } = useSession(sessionId)
+  const { data: session, error, isError } = useSession(sessionId)
+  const { user } = useCurrentUser()
   const patch = usePatchSession(sessionId)
   const detach = useDetachWallAsset(sessionId)
   const tools = useSessionTools(sessionId)
@@ -73,6 +77,17 @@ function Workspace({ sessionId }: { sessionId: string }) {
     for (const layer of session?.document.layers ?? []) if (layer.asset_id) ids.add(layer.asset_id)
     return ids
   }, [session?.document])
+
+  // 记住正在编辑的会话，下次从首页进入工作台时直接回到这里
+  const currentSessionId = session?.id
+  useEffect(() => {
+    if (currentSessionId) rememberSession(user?.username, currentSessionId)
+  }, [currentSessionId, user?.username])
+
+  // 记下的会话已被删除时清掉，避免之后的入口落到失效地址
+  useEffect(() => {
+    if (error instanceof ApiError && error.status === 404) forgetSession(sessionId)
+  }, [error, sessionId])
 
   useEffect(() => {
     if (!session) return

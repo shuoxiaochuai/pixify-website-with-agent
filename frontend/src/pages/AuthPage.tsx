@@ -3,6 +3,7 @@ import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 
 import BrandMark from '@/components/BrandMark'
 import { errorMessage, useAuthActions, useCurrentUser } from '@/hooks/useAuth'
+import { workbenchEntry } from '@/lib/lastSession'
 
 type Mode = 'login' | 'register'
 type Rules = { minLength?: number; maxLength?: number; pattern?: string; title?: string }
@@ -44,11 +45,14 @@ export default function AuthPage() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
 
-  if (!isLoading && user) return <Navigate to="/create" replace />
+  if (!isLoading && user) return <Navigate to={workbenchEntry(user.username)} replace />
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault()
-    action.mutate({ username, password }, { onSuccess: () => navigate('/create', { replace: true }) })
+    action.mutate(
+      { username, password },
+      { onSuccess: (me) => navigate(workbenchEntry(me.username), { replace: true }) },
+    )
   }
 
   const switchMode = () => {

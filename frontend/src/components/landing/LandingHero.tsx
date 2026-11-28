@@ -4,24 +4,24 @@ import PromptComposer from './PromptComposer'
 
 const SCENARIOS = [
   {
-    label: '商品主图',
-    prompt: '把这件商品放在纯白背景上，居中构图，柔和顶光，边缘干净，输出 1:1 主图。',
+    label: '纯净背景',
+    prompt: '把画面主体放在纯白背景上，居中构图，柔和顶光，边缘干净，输出 1:1 方图。',
   },
   {
-    label: '场景氛围图',
-    prompt: '把商品放到温暖的木质桌面场景，侧逆光、浅景深，保留商品原有材质与颜色。',
+    label: '场景融合',
+    prompt: '把主体放到温暖的木质桌面场景，侧逆光、浅景深，保留主体原有材质与颜色。',
   },
   {
-    label: '模特上身',
-    prompt: '生成模特手持该商品的半身展示图，简洁室内背景、自然光，商品细节清晰可辨。',
+    label: '人物出镜',
+    prompt: '生成人物与画面主体自然互动的半身展示图，简洁室内背景、自然光，主体细节清晰可辨。',
   },
   {
-    label: '促销海报',
-    prompt: '做一张大促海报：主标题「新品首发」，副标题「限时 8 折」，突出商品，右侧留出文字区。',
+    label: '文字海报',
+    prompt: '做一张海报：主标题「夏日远行」，副标题「去看看海」，右侧留出文字区，构图干净。',
   },
   {
-    label: '多尺寸物料',
-    prompt: '基于这张商品图输出一套投放物料，包含 1:1、4:5、9:16 三个尺寸，主体不被裁切。',
+    label: '多尺寸导出',
+    prompt: '基于这张图输出 1:1、4:5、9:16 三个尺寸，主体不被裁切。',
   },
 ]
 
@@ -56,7 +56,7 @@ export default function LandingHero({
           style={{ animationDelay: '40ms' }}
         >
           <span className="bg-accent size-1.5 rounded-full" aria-hidden />
-          面向电商运营与内容创作者
+          AI 驱动的通用图片工作台
         </p>
 
         <h1
@@ -70,16 +70,15 @@ export default function LandingHero({
               className="bg-accent/55 absolute inset-x-[-7px] top-[14%] bottom-[8%] -skew-x-6 rounded-[3px]"
               aria-hidden
             />
-            <span className="relative">可上架</span>
+            <span className="relative">想要的画面</span>
           </span>
-          的商品物料
         </h1>
 
         <p
           className="text-muted animate-rise mx-auto mt-5 max-w-xl leading-relaxed"
           style={{ animationDelay: '200ms' }}
         >
-          描述需求即可从零生成，也可上传商品图继续编辑。抠图、换背景、局部精修、扩图、图层拆分与多尺寸导出，全部由智能体自动编排。
+          描述需求即可从零生成，也可上传图片继续编辑。抠图、换背景、局部精修、扩图、图层拆分与多尺寸导出，全部由 AI 自动编排。
         </p>
 
         <div className="animate-rise mx-auto mt-9 max-w-3xl" style={{ animationDelay: '280ms' }}>
@@ -89,7 +88,7 @@ export default function LandingHero({
             onSubmit={() => onStart(prompt)}
             onAttach={() => onStart(prompt)}
             submitLabel={submitLabel}
-            placeholder="描述你想要的商品图，例：把这双跑鞋放到清晨的城市街道，侧逆光，输出 1:1 主图与 9:16 竖版…"
+            placeholder="描述你想要的画面，例：把这张照片的背景换成海边日落，人物与光线保持不变…"
             inputRef={inputRef}
           />
         </div>

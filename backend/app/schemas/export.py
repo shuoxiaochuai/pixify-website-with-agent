@@ -32,5 +32,5 @@ class ExportOut(BaseModel):
     manifest: ExportManifestOut
 
 
-# 默认打包营销图与投放尺寸；未指定时也只收这两类
+# 默认打包衍生图与尺寸适配；未指定时也只收这两类
 EXPORT_KINDS = (AssetKind.MARKETING, AssetKind.EXPORT)

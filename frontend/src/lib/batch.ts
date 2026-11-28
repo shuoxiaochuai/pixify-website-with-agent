@@ -19,7 +19,7 @@ export const BATCH_STEPS: { id: BatchTool; label: string; hint: string }[] = [
   { id: 'adjust_image', label: '调色', hint: '亮度、对比度、饱和度' },
   { id: 'upscale_image', label: '超分', hint: '提高分辨率' },
   { id: 'expand_canvas', label: '扩图', hint: '扩展到指定比例' },
-  { id: 'prepare_delivery_sizes', label: '投放尺寸', hint: '完整放入 1:1 / 4:5 / 9:16' },
+  { id: 'prepare_delivery_sizes', label: '尺寸适配', hint: '完整放入 1:1 / 4:5 / 9:16' },
 ]
 
 export const EXPAND_RATIOS: Ratio[] = ['1:1', '4:5', '9:16', '16:9']
@@ -75,7 +75,7 @@ export function draftReady(draft: BatchDraft, assetCount: number): string | null
     return '换背景需要填写描述'
   }
   if (draft.selected.includes('prepare_delivery_sizes') && draft.delivery.length === 0) {
-    return '投放尺寸至少选一个比例'
+    return '尺寸适配至少选一个比例'
   }
   if (draft.formats.length === 0) return '至少选择一种导出格式'
   return null

@@ -155,7 +155,7 @@ SEGMENT_LESION = ToolSpec(
     description=(
         "在眼底图上分割糖尿病视网膜病灶，每类生成一个半透明彩色标注图层（可单独显隐、调透明度、撤销）。"
         "types 取值：EX 出血点、HE 硬性渗出、MA 微血管瘤、SE 软性渗出，不填则四类全跑。"
-        "只适用于眼底/视网膜照片；普通商品图不要用它。"
+        "只适用于眼底/视网膜照片；普通照片不要用它。"
     ),
     params=SegmentLesionIn,
     handler=segment_lesion_exec,

@@ -96,7 +96,7 @@ async def test_upload_requires_authentication(client: httpx.AsyncClient):
 async def test_library_groups_assets_by_session_and_hides_masks(signed_in: httpx.AsyncClient):
     loose = await signed_in.post("/api/assets", files=upload_payload(make_image((320, 200))))
     session = await signed_in.post(
-        "/api/sessions", json={"current_asset_id": loose.json()["id"], "title": "主图"}
+        "/api/sessions", json={"current_asset_id": loose.json()["id"], "title": "作品"}
     )
     extra = await signed_in.post("/api/assets", files=upload_payload(make_image((400, 300))))
     await signed_in.post("/api/assets", files=upload_payload(make_image((256, 256), mode="RGBA")))
@@ -107,7 +107,7 @@ async def test_library_groups_assets_by_session_and_hides_masks(signed_in: httpx
 
     groups = (await signed_in.get("/api/assets/library")).json()
 
-    assert [group["title"] for group in groups] == ["主图", "未归入会话"]
+    assert [group["title"] for group in groups] == ["作品", "未归入会话"]
     assert groups[0]["session_id"] == session.json()["id"]
     assert extra.json()["id"] in [asset["id"] for asset in groups[1]["assets"]]
     assert all(asset["kind"] != "mask" for group in groups for asset in group["assets"])

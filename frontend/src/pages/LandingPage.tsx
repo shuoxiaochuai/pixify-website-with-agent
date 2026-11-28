@@ -7,18 +7,21 @@ import LandingHeader from '@/components/landing/LandingHeader'
 import LandingHero from '@/components/landing/LandingHero'
 import StartBanner from '@/components/landing/StartBanner'
 import { useCurrentUser } from '@/hooks/useAuth'
+import { workbenchEntry } from '@/lib/lastSession'
 import { readPromptDraft, savePromptDraft } from '@/lib/promptDraft'
 
 export default function LandingPage() {
   const navigate = useNavigate()
   const { user } = useCurrentUser()
 
-  // 未登录一律先去登录页，登录态直接进工作台
-  const entry = user ? { label: '进入工作台', to: '/create' } : { label: '免费开始', to: '/auth' }
+  // 顶栏与底部入口回到上次编辑的会话；输入框是创作入口，带草稿进创作页
+  const entry = user
+    ? { label: '进入工作台', to: workbenchEntry(user.username) }
+    : { label: '免费开始', to: '/auth' }
 
   const start = (prompt: string) => {
     savePromptDraft(prompt)
-    navigate(entry.to)
+    navigate(user ? '/create' : '/auth')
   }
 
   return (

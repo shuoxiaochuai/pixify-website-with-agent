@@ -235,7 +235,7 @@ export default function EditorToolbar({
               title="眼底病灶分割，生成半透明标注图层"
               onClick={() => ui.setPanel(ui.panel === 'lesion' ? null : 'lesion')}
             >
-              病灶
+              分割
             </Button>
             <Button
               disabled={tools.busy}
@@ -320,7 +320,7 @@ export default function EditorToolbar({
           </Button>
         </div>
 
-        <Link to={`/marketing/${session.id}`} title="导出营销图和投放尺寸" className={buttonClass()}>
+        <Link to={`/marketing/${session.id}`} title="导出衍生图和多尺寸版本" className={buttonClass()}>
           导出
         </Link>
         <Button

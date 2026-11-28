@@ -19,8 +19,8 @@ const CAPABILITIES: { title: string; desc: string; preview: ReactNode }[] = [
     preview: <LayersPreview />,
   },
   {
-    title: '物料包交付',
-    desc: '卖点标注与 1:1、4:5、9:16 尺寸一次导出，主体不裁切，直接上架投放。',
+    title: '多尺寸交付',
+    desc: '1:1、4:5、9:16 尺寸一次导出，主体不裁切，打包下载。',
     preview: <ExportsPreview />,
   },
 ]
